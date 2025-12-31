@@ -1,0 +1,30 @@
+[
+  {
+    "file": "src/memory/memory.jl",
+    "line": 15,
+    "error": "Configuration Inconsistency: The Memory module hardcodes file paths (~/.kamila_memory.json) instead of using the central constants defined in Kamila.jl. This makes configuration management difficult.",
+    "rank": 70,
+    "suggestion": "Update the module to use the global constants or allow path injection."
+  },
+  {
+    "file": "src/security/auth.jl",
+    "line": 14,
+    "error": "Security Risk: A default password 'kamila123' is hardcoded as a fallback. While not used if setup is completed, its presence in source code is a bad practice.",
+    "rank": 60,
+    "suggestion": "Remove the hardcoded default password and force a setup flow."
+  },
+  {
+    "file": "src/Kamila.jl",
+    "line": 10,
+    "error": "Optimization: 'ArgParse' is imported but 'handle_args' performs manual string matching. The library is unused overhead.",
+    "rank": 20,
+    "suggestion": "Remove the ArgParse dependency or implement it properly for argument handling."
+  },
+  {
+    "file": "src/ai/agent.jl",
+    "line": 105,
+    "error": "UX/Logic: Agent mode does not check if Ollama is running before prompting the user for input, leading to a late failure after the user has already typed their request.",
+    "rank": 40,
+    "suggestion": "Add a connection check at the entry point of 'start_agent_mode'."
+  }
+]

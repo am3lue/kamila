@@ -1,0 +1,127 @@
+#!/bin/bash
+
+# Kamila Launch Script
+# Personal Terminal Assistant
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Change to project directory
+cd "$PROJECT_DIR"
+
+# Set up environment
+export JULIA_PROJECT="$PROJECT_DIR"
+
+# Check if Julia is available
+if ! command -v julia &> /dev/null; then
+    echo "❌ Julia is not installed or not in PATH"
+    echo "Please install Julia from https://julialang.org/downloads/"
+    exit 1
+fi
+
+# Function to show help
+show_help() {
+    echo "Kamila - Personal Terminal Assistant"
+    echo ""
+    echo "Usage: $0 [options]"
+    echo ""
+    echo "Options:"
+    echo "  --help, -h        Show this help message"
+    echo "  --version, -v     Show version information"
+    echo "  --test, -t        Run tests"
+    echo "  --setup           Run initial setup"
+    echo "  --demo            Show demo"
+    echo ""
+    echo "Examples:"
+    echo "  $0                Launch Kamila"
+    echo "  $0 --test         Run tests"
+    echo "  $0 --demo         Show demo"
+}
+
+# Function to show version
+show_version() {
+    echo "Kamila v0.1.0"
+    echo "Personal Terminal Assistant"
+    echo "K.A.M.I.L.A: Kind, Adaptive, Mind, Integrating, Logic, Assistant"
+}
+
+# Function to run tests
+run_tests() {
+    echo "🧪 Running Kamila tests..."
+    julia --project="$PROJECT_DIR" -e "include(\"test/runtests.jl\"); KamilaTests.run_all_tests()"
+}
+
+# Function to run setup
+run_setup() {
+    echo "🔧 Initial setup..."
+    
+    # Install Julia packages
+    echo "Installing Julia packages..."
+    julia --project="$PROJECT_DIR" -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"
+    
+    # Setup Ollama model if Ollama is available
+    if command -v ollama &> /dev/null; then
+        echo "Setting up Ollama model..."
+        if [ -f "Modelfile" ]; then
+            ollama create kamila -f Modelfile
+            echo "✅ Kamila model created successfully"
+        else
+            echo "⚠️  Modelfile not found. Please create it manually."
+        fi
+    else
+        echo "⚠️  Ollama not found. AI features will be limited."
+        echo "   Install Ollama from https://ollama.ai/"
+    fi
+    
+    echo "✅ Setup completed"
+}
+
+# Function to show demo
+show_demo() {
+    julia --project="$PROJECT_DIR" -e "include(\"test/runtests.jl\"); KamilaTests.demo_kamila()"
+}
+
+# Function to run quick compatibility test
+run_compatibility_test() {
+    echo "🔍 Running compatibility test..."
+    julia --project="$PROJECT_DIR" -e "include(\"test/runtests.jl\"); KamilaTests.test_system_compatibility()"
+}
+
+# Parse command line arguments
+case "${1:-}" in
+    --help|-h)
+        show_help
+        exit 0
+        ;;
+    --version|-v)
+        show_version
+        exit 0
+        ;;
+    --test|-t)
+        run_tests
+        exit 0
+        ;;
+    --setup)
+        run_setup
+        exit 0
+        ;;
+    --demo)
+        show_demo
+        exit 0
+        ;;
+    --check)
+        run_compatibility_test
+        exit 0
+        ;;
+    "")
+        # No arguments - launch Kamila
+        echo "🚀 Starting Kamila..."
+        julia --project="$PROJECT_DIR" src/Kamila.jl
+        ;;
+    *)
+        echo "❌ Unknown option: $1"
+        echo "Use --help for usage information"
+        exit 1
+        ;;
+esac
