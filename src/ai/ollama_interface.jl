@@ -255,7 +255,7 @@ function setup_kamila_model()
         end
         
         # Check if Modelfile exists
-        modelfile_path = joinpath(pwd(), "Modelfile")
+        modelfile_path = joinpath(pwd(), "config/Modelfile")
         if !isfile(modelfile_path)
             return Dict("success" => false, "error" => "Modelfile not found")
         end

@@ -1,4 +1,4 @@
-FROM llama3:latest
+FROM qwen3-coder:8b
 
 # Kamila - Multi-Language Code Assistant (Julia, C, C++)
 SYSTEM """
@@ -342,7 +342,6 @@ TOOL USAGE INSTRUCTIONS:
 """
 PARAMETER temperature 0.8
 PARAMETER top_p 0.9
-PARAMETER max_tokens 200
 PARAMETER frequency_penalty 0.5
 PARAMETER presence_penalty 0.2
 PARAMETER stop "\n\n"

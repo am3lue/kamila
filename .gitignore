@@ -1,0 +1,44 @@
+# Julia specific
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+*.julia_history
+docs/build/
+docs/site/
+
+# Package specific
+deps/deps.jl
+deps/deps.downloaded
+deps/deps.build
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Backup files
+.backup/
+*.bak
+*~
+.#*
+
+# Logs
+*.log
+logs/
+
+# Local environment
+.env
+.env.local
+
+# Compiled files
+*.so
+*.o
+*.a
+*.dll
+*.dylib
+
+# Kamila tracker
+.kamila_tracker.json
+
+# Binaries
+# bin/
+
