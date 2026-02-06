@@ -1,4 +1,4 @@
-# Julia specific
+# Julia specific - auto-generated
 *.jl.cov
 *.jl.*.cov
 *.jl.mem
@@ -6,39 +6,61 @@
 docs/build/
 docs/site/
 
-# Package specific
+# Package specific - auto-generated
 deps/deps.jl
 deps/deps.downloaded
 deps/deps.build
 
-# System files
+# VSCode/Julia IDE - auto-generated
+*.code-workspace
+.vscode/
+tasks.json
+launch.json
+settings.json
+
+# System files - auto-generated
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Backup files
-.backup/
+# Backup files - auto-generated
+#.backup/
 *.bak
 *~
 .#*
+*.swp
+*.swo
 
-# Logs
+# Logs - auto-generated
 *.log
 logs/
+*.tmp
 
-# Local environment
+# Local environment - auto-generated
 .env
 .env.local
+.local/
 
-# Compiled files
+# Compiled/Derived files - auto-generated
 *.so
 *.o
 *.a
 *.dll
 *.dylib
+*.pdb
+*.dbg
 
-# Kamila tracker
+# Kamila tracker - auto-generated
 .kamila_tracker.json
+.kamila_*.json
 
-# Binaries
-# bin/
+# Binaries - auto-generated
+#bin/
+obj/
+build/
+
+# Coverage and test output - auto-generated
+coverage/
+lcov.info
+*.test
 
