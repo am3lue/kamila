@@ -59,31 +59,74 @@ end
 function parse_response(response::String)
     clean_response = strip(response)
     
-    # Try to find a JSON block in markdown
-    m = match(r"```json\s*({.*?})\s*```"s, clean_response)
-    json_str = m !== nothing ? m.captures[1] : ""
+    # List of potential JSON candidates
+    candidates = String[]
     
-    # If no markdown, check if the whole response is JSON
-    if isempty(json_str) && startswith(clean_response, "{") && endswith(clean_response, "}")
-        json_str = clean_response
+    # 1. Extract from markdown blocks (```json ... ``` or just ``` ... ```)
+    for m in eachmatch(r"```(?:json)?\s*(\{.*?\})\s*```"s, clean_response)
+        push!(candidates, m.captures[1])
     end
     
-    # If still empty, try to find any { } block that might be JSON
-    if isempty(json_str)
-        m = match(r"({.*})"s, clean_response)
-        if m !== nothing
-            json_str = m.captures[1]
-        end
+    # 2. Extract anything between { and }
+    # We use a greedy match for the outer-most braces
+    m_outer = match(r"(\{.*\})"s, clean_response)
+    if m_outer !== nothing
+        push!(candidates, m_outer.captures[1])
+    end
+    
+    # 3. Add the whole string if it starts/ends with braces
+    if startswith(clean_response, "{") && endswith(clean_response, "}")
+        push!(candidates, clean_response)
     end
 
-    if !isempty(json_str)
+    for json_str in candidates
+        # Pre-process json_str to fix common AI mistakes
+        processed_json = json_str
+        
+        # Remove trailing commas in objects/arrays (common AI mistake)
+        processed_json = replace(processed_json, r",\s*([\}\]])" => s"\1")
+        
+        # Fix unescaped newlines in strings
+        # This is tricky, but we can try to find newlines that aren't followed by a key or end of object
+        # For now, let's stick to basics but keep it in mind
+        
         try
-            data = JSON.parse(json_str)
-            if haskey(data, "tool") && (haskey(data, "args") || haskey(data, "arguments"))
-                args = get(data, "args", get(data, "arguments", Dict()))
-                return (true, data["tool"], args)
+            data = JSON.parse(processed_json)
+            
+            # Normalize keys: check for 'tool', 'name', 'function', 'call'
+            tool_name = ""
+            for key in ["tool", "name", "function", "tool_name", "call", "command"]
+                if haskey(data, key) && data[key] isa String
+                    tool_name = data[key]
+                    break
+                end
             end
+            
+            if isempty(tool_name)
+                continue
+            end
+            
+            # Normalize arguments: check for 'args', 'arguments', 'parameters', 'params', 'input'
+            args = Dict()
+            for key in ["args", "arguments", "parameters", "params", "input", "props"]
+                if haskey(data, key) && (data[key] isa Dict || data[key] isa AbstractDict)
+                    args = data[key]
+                    break
+                end
+            end
+            
+            # If no explicit args object, the rest of the object might BE the args
+            if isempty(args)
+                args = copy(data)
+                # Remove the tool name key from args
+                for key in ["tool", "name", "function", "tool_name", "call", "command"]
+                    delete!(args, key)
+                end
+            end
+            
+            return (true, tool_name, args)
         catch
+            continue
         end
     end
     
@@ -104,7 +147,7 @@ function print_header()
         $(Crayon(foreground=:yellow))/clear$(Crayon(reset=true))   - Clear the screen
         $(Crayon(foreground=:yellow))/exit$(Crayon(reset=true))    - Return to main menu
         """,
-        title="🤖 Kamila Agent Mode",
+        title="Kamila Agent Mode",
         style="bold green",
         fit=true
     )
@@ -156,7 +199,7 @@ function format_ai_response(text::String)
         title="Kamila",
         style="blue",
         fit=false,
-        width=80
+        width=60
     ))
     println()
 end
@@ -172,13 +215,13 @@ function start_agent_mode()
         # Fancy prompt with current directory
         current_dir = basename(pwd())
         if isempty(current_dir)
-            current_dir = "/"
+            current_dir = "/home/"
         end
         
         prompt_str = "\n$(Crayon(foreground=:green, bold=true))User [$(current_dir)] > $(Crayon(reset=true))"
         print(prompt_str)
         
-        user_input = strip(readline(stdin))
+        user_input = strip(readline())
         
         # Handle empty input
         if isempty(user_input)
@@ -233,7 +276,7 @@ function start_agent_mode()
             is_tool, tool_name, tool_args = parse_response(response)
             
             if is_tool
-                println(Crayon(foreground=:blue)("🛠️  Using tool: ") * Crayon(bold=true)(tool_name))
+                println(Crayon(foreground=:blue)("🛠️  Using tool: "), Crayon(bold=true)(tool_name))
                 
                 try
                     tool_output = AgentTools.execute_tool(tool_name, tool_args)

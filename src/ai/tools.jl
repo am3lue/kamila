@@ -4,9 +4,11 @@ Tool Definitions for Kamila Agent
 
 module AgentTools
 
-# using ..TaskManager
+
 using Dates
 using ..FileAccess
+using ..KamilaMemory
+using ..TaskManager
 
 export Tool, get_all_tools, execute_tool
 
@@ -97,6 +99,10 @@ function add_task_tool(args::Dict)
     description = get(args, "description", "")
     category = get(args, "category", "general")
     priority = get(args, "priority", 2)
+    estimated_time = get(args, "estimated_time", 30)
+    due_date_str = get(args, "due_date", "")
+    due_date = isempty(due_date_str) ? nothing : TaskManager.parse_date(due_date_str)
+    
     
     # For now, just simulate task creation since TaskManager dependency is problematic
     task_id = rand(1:1000)  # Simulate a task ID
@@ -219,5 +225,9 @@ end
 #     end
 #     return "Error: Tool '$tool_name' not found"
 # end
+
+# """Parse tool command from AI response
+# Expected format: {"tool": "tool_name", "args": {"param1": "value1", ...}}
+# """
 
 end # module

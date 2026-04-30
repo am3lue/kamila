@@ -6,7 +6,6 @@ module TrackerUI
 
 using ..CodeTracker
 using ..UIComponents
-using Term
 using Crayons
 
 export show_tracker_menu, handle_tracker_menu

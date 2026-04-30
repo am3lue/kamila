@@ -1,7 +1,4 @@
-"""
-TUI Components Module for Kamila
-Provides reusable UI components using Term.jl
-"""
+
 
 module UIComponents
 

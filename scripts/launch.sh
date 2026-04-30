@@ -55,3 +55,4 @@ echo ""
 
 # Launch Kamila
 julia --project="." src/Kamila.jl "$@"
+exit

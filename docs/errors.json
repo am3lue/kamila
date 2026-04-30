@@ -22,7 +22,7 @@
   },
   {
     "file": "src/ai/agent.jl",
-    "line": 105,
+    "line": 145,
     "error": "UX/Logic: Agent mode does not check if Ollama is running before prompting the user for input, leading to a late failure after the user has already typed their request.",
     "rank": 40,
     "suggestion": "Add a connection check at the entry point of 'start_agent_mode'."

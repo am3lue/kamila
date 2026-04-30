@@ -3,7 +3,6 @@ module Kamila
 using HTTP
 using JSON
 using SHA
-using Term
 using Crayons
 using Dates
 # using FileWatching

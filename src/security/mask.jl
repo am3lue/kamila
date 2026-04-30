@@ -10,7 +10,6 @@ using ..Auth
 using ..MainUI
 using ..Agent
 using Crayons
-using Term
 
 export start_mask_mode
 
@@ -27,7 +26,7 @@ function start_mask_mode()
 
     while true
         print(Crayon(foreground=:blue)("Kamila > "))
-        user_input = strip(readline(stdin))
+        user_input = strip(readline())
 
         if isempty(user_input)
             continue

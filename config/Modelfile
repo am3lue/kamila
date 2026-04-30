@@ -1,4 +1,4 @@
-FROM qwen3:8b
+FROM qwen2.5-coder:0.5b
 
 # Kamila - Multi-Language Code Assistant (Julia, C, C++)
 SYSTEM """
