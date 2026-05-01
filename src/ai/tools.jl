@@ -44,7 +44,7 @@ function run_shell_command(args::Dict)
     try
         # Simple execution
         output = read(`bash -c $command`, String)
-        return output
+        return "The Command \"$command\" returned: $output please Check the output and if it is correct, you can use the output for your next steps."
     catch e
         return "Error executing command: $e"
     end

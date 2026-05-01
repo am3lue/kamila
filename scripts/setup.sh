@@ -31,7 +31,7 @@ if command -v ollama &> /dev/null; then
     echo "🤖 Ollama found. Setting up Kamila model..."
     
     # Check if Modelfile exists
-    if [ -f "config/Modelfile" ]; then
+    if [ -f "../config/Modelfile" ]; then
         # Try to create the model
         ollama create kamila -f config/Modelfile 2>/dev/null
         

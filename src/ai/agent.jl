@@ -286,7 +286,7 @@ function start_agent_mode()
                         try
                             tool_output = AgentTools.execute_tool(tool_name, tool_args)
                             
-                            println(Crayon(foreground=:dark_gray)("   ↳ Tool execution completed"))
+                            println(Crayon(foreground=:dark_gray)("   ↳ Tool execution completed output: $tool_output"))
                             
                             # Add this step to the current context for the next iteration
                             current_context *= "Kamila: (Tool Call) $response\nSystem: Tool output: $tool_output\n"
