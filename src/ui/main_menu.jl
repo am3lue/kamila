@@ -62,6 +62,11 @@ function run_main_loop()
                 sleep(2)
             end
         catch e
+            if e isa InterruptException
+                UIComponents.show_info("\n⚠️  Interrupted. Returning to Main Menu...")
+                sleep(1)
+                continue
+            end
             UIComponents.show_error("An error occurred: $e")
             println("Press Enter to continue...")
             readline(stdin)
@@ -74,24 +79,33 @@ Handle task manager menu
 """
 function handle_task_manager()
     while true
-        UIComponents.show_task_manager()
-        choice = strip(readline(stdin))
-        
-        if choice == "0"
-            break
-        elseif choice == "1"
-            add_new_task()
-        elseif choice == "2"
-            complete_task()
-        elseif choice == "3"
-            generate_daily_schedule()
-        elseif choice == "4"
-            view_overdue_tasks()
-        elseif choice == "5"
-            export_tasks()
-        else
-            UIComponents.show_error("Invalid option. Please choose 0-5.")
-            sleep(1)
+        try
+            UIComponents.show_task_manager()
+            choice = strip(readline(stdin))
+            
+            if choice == "0"
+                break
+            elseif choice == "1"
+                add_new_task()
+            elseif choice == "2"
+                complete_task()
+            elseif choice == "3"
+                generate_daily_schedule()
+            elseif choice == "4"
+                view_overdue_tasks()
+            elseif choice == "5"
+                export_tasks()
+            else
+                UIComponents.show_error("Invalid option. Please choose 0-5.")
+                sleep(1)
+            end
+        catch e
+            if e isa InterruptException
+                UIComponents.show_info("\n⚠️  Interrupted. Resetting menu...")
+                sleep(1)
+                continue
+            end
+            rethrow(e)
         end
     end
 end
@@ -101,22 +115,31 @@ Handle memory stats menu
 """
 function handle_memory_stats()
     while true
-        UIComponents.show_memory_stats()
-        choice = strip(readline(stdin))
-        
-        if choice == "0"
-            break
-        elseif choice == "1"
-            add_new_goal()
-        elseif choice == "2"
-            view_active_goals()
-        elseif choice == "3"
-            complete_goal()
-        elseif choice == "4"
-            generate_memory_summary()
-        else
-            UIComponents.show_error("Invalid option. Please choose 0-4.")
-            sleep(1)
+        try
+            UIComponents.show_memory_stats()
+            choice = strip(readline(stdin))
+            
+            if choice == "0"
+                break
+            elseif choice == "1"
+                add_new_goal()
+            elseif choice == "2"
+                view_active_goals()
+            elseif choice == "3"
+                complete_goal()
+            elseif choice == "4"
+                generate_memory_summary()
+            else
+                UIComponents.show_error("Invalid option. Please choose 0-4.")
+                sleep(1)
+            end
+        catch e
+            if e isa InterruptException
+                UIComponents.show_info("\n⚠️  Interrupted. Resetting menu...")
+                sleep(1)
+                continue
+            end
+            rethrow(e)
         end
     end
 end
@@ -126,22 +149,31 @@ Handle system status menu
 """
 function handle_system_status()
     while true
-        UIComponents.show_system_status()
-        choice = strip(readline(stdin))
-        
-        if choice == "0"
-            break
-        elseif choice == "1"
-            generate_daily_system_report()
-        elseif choice == "2"
-            monitor_resources()
-        elseif choice == "3"
-            view_system_alerts()
-        elseif choice == "4"
-            get_compatibility_report()
-        else
-            UIComponents.show_error("Invalid option. Please choose 0-4.")
-            sleep(1)
+        try
+            UIComponents.show_system_status()
+            choice = strip(readline(stdin))
+            
+            if choice == "0"
+                break
+            elseif choice == "1"
+                generate_daily_system_report()
+            elseif choice == "2"
+                monitor_resources()
+            elseif choice == "3"
+                view_system_alerts()
+            elseif choice == "4"
+                get_compatibility_report()
+            else
+                UIComponents.show_error("Invalid option. Please choose 0-4.")
+                sleep(1)
+            end
+        catch e
+            if e isa InterruptException
+                UIComponents.show_info("\n⚠️  Interrupted. Resetting menu...")
+                sleep(1)
+                continue
+            end
+            rethrow(e)
         end
     end
 end
@@ -151,22 +183,31 @@ Handle desktop organization menu
 """
 function handle_desktop_organization()
     while true
-        UIComponents.show_desktop_organization()
-        choice = strip(readline(stdin))
-        
-        if choice == "0"
-            break
-        elseif choice == "1"
-            organize_desktop_automatically()
-        elseif choice == "2"
-            get_ai_organization_suggestions()
-        elseif choice == "3"
-            clean_old_files()
-        elseif choice == "4"
-            generate_desktop_health_report()
-        else
-            UIComponents.show_error("Invalid option. Please choose 0-4.")
-            sleep(1)
+        try
+            UIComponents.show_desktop_organization()
+            choice = strip(readline(stdin))
+            
+            if choice == "0"
+                break
+            elseif choice == "1"
+                organize_desktop_automatically()
+            elseif choice == "2"
+                get_ai_organization_suggestions()
+            elseif choice == "3"
+                clean_old_files()
+            elseif choice == "4"
+                generate_desktop_health_report()
+            else
+                UIComponents.show_error("Invalid option. Please choose 0-4.")
+                sleep(1)
+            end
+        catch e
+            if e isa InterruptException
+                UIComponents.show_info("\n⚠️  Interrupted. Resetting menu...")
+                sleep(1)
+                continue
+            end
+            rethrow(e)
         end
     end
 end
@@ -176,26 +217,35 @@ Handle AI assistant menu
 """
 function handle_ai_assistant()
     while true
-        UIComponents.show_ai_assistant()
-        choice = strip(readline(stdin))
-        
-        if choice == "0"
-            break
-        elseif choice == "1"
-            test_ai_connection()
-        elseif choice == "2"
-            setup_kamila_model()
-        elseif choice == "3"
-            get_productivity_suggestions()
-        elseif choice == "4"
-            explain_file_with_ai()
-        elseif choice == "5"
-            generate_ai_daily_report()
-        elseif choice == "6"
-            Agent.start_agent_mode()
-        else
-            UIComponents.show_error("Invalid option. Please choose 0-5.")
-            sleep(1)
+        try
+            UIComponents.show_ai_assistant()
+            choice = strip(readline(stdin))
+            
+            if choice == "0"
+                break
+            elseif choice == "1"
+                test_ai_connection()
+            elseif choice == "2"
+                setup_kamila_model()
+            elseif choice == "3"
+                get_productivity_suggestions()
+            elseif choice == "4"
+                explain_file_with_ai()
+            elseif choice == "5"
+                generate_ai_daily_report()
+            elseif choice == "6"
+                Agent.start_agent_mode()
+            else
+                UIComponents.show_error("Invalid option. Please choose 0-5.")
+                sleep(1)
+            end
+        catch e
+            if e isa InterruptException
+                UIComponents.show_info("\n⚠️  Interrupted. Resetting menu...")
+                sleep(1)
+                continue
+            end
+            rethrow(e)
         end
     end
 end
@@ -205,22 +255,31 @@ Handle settings menu
 """
 function handle_settings()
     while true
-        UIComponents.show_settings()
-        choice = strip(readline(stdin))
-        
-        if choice == "0"
-            break
-        elseif choice == "1"
-            change_password()
-        elseif choice == "2"
-            reset_authentication()
-        elseif choice == "3"
-            view_security_report()
-        elseif choice == "4"
-            export_settings()
-        else
-            UIComponents.show_error("Invalid option. Please choose 0-4.")
-            sleep(1)
+        try
+            UIComponents.show_settings()
+            choice = strip(readline(stdin))
+            
+            if choice == "0"
+                break
+            elseif choice == "1"
+                change_password()
+            elseif choice == "2"
+                reset_authentication()
+            elseif choice == "3"
+                view_security_report()
+            elseif choice == "4"
+                export_settings()
+            else
+                UIComponents.show_error("Invalid option. Please choose 0-4.")
+                sleep(1)
+            end
+        catch e
+            if e isa InterruptException
+                UIComponents.show_info("\n⚠️  Interrupted. Resetting menu...")
+                sleep(1)
+                continue
+            end
+            rethrow(e)
         end
     end
 end

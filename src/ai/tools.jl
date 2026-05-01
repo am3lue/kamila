@@ -99,25 +99,61 @@ function add_task_tool(args::Dict)
     description = get(args, "description", "")
     category = get(args, "category", "general")
     priority = get(args, "priority", 2)
+    # Ensure priority is Int
+    priority = if priority isa String
+        tryparse(Int, priority) === nothing ? 2 : parse(Int, priority)
+    elseif priority isa Number
+        Int(priority)
+    else
+        2
+    end
+
     estimated_time = get(args, "estimated_time", 30)
+    estimated_time = if estimated_time isa String
+        tryparse(Int, estimated_time) === nothing ? 30 : parse(Int, estimated_time)
+    elseif estimated_time isa Number
+        Int(estimated_time)
+    else
+        30
+    end
+
     due_date_str = get(args, "due_date", "")
     due_date = isempty(due_date_str) ? nothing : TaskManager.parse_date(due_date_str)
     
-    
-    # For now, just simulate task creation since TaskManager dependency is problematic
-    task_id = rand(1:1000)  # Simulate a task ID
-    return "Task added successfully: ID $task_id (Title: $title)"
+    try
+        task = TaskManager.add_task(
+            title, 
+            description=description, 
+            category=category, 
+            priority=priority, 
+            estimated_time=estimated_time,
+            due_date=due_date
+        )
+        return "Task added successfully: ID $(task.id) (Title: $(task.title))"
+    catch e
+        return "Error adding task: $e"
+    end
 end
 
 """
 List tasks
 """
 function list_tasks_tool(args::Dict)
-    # For now, return a simulated task list
-    return """Pending Tasks:
-- [1] Complete project documentation (Priority: 3)
-- [2] Review code changes (Priority: 2)
-- [3] Plan next sprint (Priority: 1)"""
+    try
+        tasks = TaskManager.get_pending_tasks()
+        if isempty(tasks)
+            return "No pending tasks found."
+        end
+        
+        report = ["Pending Tasks:"]
+        for task in tasks
+            due_str = task.due_date !== nothing ? " (Due: $(task.due_date))" : ""
+            push!(report, "- [$(task.id)] $(task.title) (Priority: $(task.priority))$due_str")
+        end
+        return join(report, "\n")
+    catch e
+        return "Error listing tasks: $e"
+    end
 end
 
 """
@@ -125,11 +161,28 @@ Complete a task
 """
 function complete_task_tool(args::Dict)
     task_id = get(args, "task_id", 0)
+    # Handle string task_id
+    task_id = if task_id isa String
+        tryparse(Int, task_id) === nothing ? 0 : parse(Int, task_id)
+    elseif task_id isa Number
+        Int(task_id)
+    else
+        0
+    end
+
     if task_id == 0
-        return "Error: Valid task_id is required"
+        return "Error: Valid numeric task_id is required"
     end
     
-    return "Task $task_id marked as completed successfully."
+    try
+        if TaskManager.complete_task(task_id)
+            return "Task $task_id marked as completed successfully."
+        else
+            return "Error: Task $task_id not found."
+        end
+    catch e
+        return "Error completing task: $e"
+    end
 end
 
 """

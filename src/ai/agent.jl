@@ -12,6 +12,8 @@ export start_agent_mode, parse_response
 
 const MAX_HISTORY = 10
 
+const MAX_ITERATIONS = 10
+
 # --- Helper Functions ---
 
 function get_system_prompt()
@@ -29,28 +31,26 @@ function get_system_prompt()
     json_tools = JSON.json(tools_desc)
     
     parts = [
-        "You are Kamila, an AI assistant. Help users with their requests naturally.",
+        "You are Kamila, an intelligent and strategic autonomous AI assistant running on Linux.",
+        "Your goal is to fulfill user requests efficiently. You have a mental framework: Read -> Analyze -> Execute -> Check.",
         "",
-        "## Available Tools (for system integration)",
+        "## STRATEGY & FLEXIBILITY:",
+        "- DO NOT follow the cycle blindly. Identify which steps are actually needed for the specific task.",
+        "- If a task is simple and you already have the answer, provide the Final Response immediately.",
+        "- If you need to perform actions, explain your reasoning (Thought) before calling a tool.",
+        "- You can skip the 'Check' phase if the tool output is definitive and self-explanatory.",
+        "- Be concise. Do not perform redundant steps or repeat actions.",
+        "",
+        "## TOOL USAGE:",
+        "- Respond with JSON when you want to use a tool: {\"tool\": \"function_name\", \"args\": {...}}",
+        "- Include your reasoning BEFORE the JSON block so the user knows what you are doing.",
+        "- You can only call ONE tool at a time.",
+        "- NEVER simulate tool outputs. Use the real results provided by the system.",
+        "",
+        "## Available Tools:",
         json_tools,
         "",
-        "TOOL USAGE INSTRUCTIONS:",
-        "- Always respond with JSON when using tools. Format: {\"tool\": \"function_name\", \"args\": {...}}",
-        "- Use tools for all system interactions, file operations, and task management",
-        "- For file operations, use absolute paths or paths relative to current directory",
-        "- When creating/modifying files, ensure content is properly formatted",
-        "- Track all activities using memory functions after tool usage",
-        "- Generate summaries after completing user tasks",
-        "- Use run_shell_command for system operations like file listing, process management",
-        "- Combine multiple tools in sequence when needed for complex tasks",
-        "",
-        "## Response Style",
-        "- Be conversational and helpful",
-        "- Provide direct answers when possible",
-        "- Use tools only when absolutely necessary for system operations",
-        "- Keep responses concise and clear",
-        "",
-        "You are running on Linux. Awaiting your first command."
+        "Awaiting your instructions."
     ]
     
     return join(parts, "\n")
@@ -61,39 +61,36 @@ function parse_response(response::String)
     
     # List of potential JSON candidates
     candidates = String[]
+    json_blocks = [] # Store matches to identify where they are in the string
     
-    # 1. Extract from markdown blocks (```json ... ``` or just ``` ... ```)
+    # 1. Extract from markdown blocks
     for m in eachmatch(r"```(?:json)?\s*(\{.*?\})\s*```"s, clean_response)
         push!(candidates, m.captures[1])
+        push!(json_blocks, m.match)
     end
     
-    # 2. Extract anything between { and }
-    # We use a greedy match for the outer-most braces
-    m_outer = match(r"(\{.*\})"s, clean_response)
-    if m_outer !== nothing
-        push!(candidates, m_outer.captures[1])
-    end
-    
-    # 3. Add the whole string if it starts/ends with braces
-    if startswith(clean_response, "{") && endswith(clean_response, "}")
-        push!(candidates, clean_response)
+    # 2. Extract anything between { and } if no markdown
+    if isempty(candidates)
+        m_outer = match(r"(\{.*\})"s, clean_response)
+        if m_outer !== nothing
+            push!(candidates, m_outer.captures[1])
+            push!(json_blocks, m_outer.match)
+        end
     end
 
+    # Extract the "Thought" (text outside the JSON)
+    thought = clean_response
+    for block in json_blocks
+        thought = replace(thought, block => "")
+    end
+    thought = strip(thought)
+
     for json_str in candidates
-        # Pre-process json_str to fix common AI mistakes
-        processed_json = json_str
-        
-        # Remove trailing commas in objects/arrays (common AI mistake)
-        processed_json = replace(processed_json, r",\s*([\}\]])" => s"\1")
-        
-        # Fix unescaped newlines in strings
-        # This is tricky, but we can try to find newlines that aren't followed by a key or end of object
-        # For now, let's stick to basics but keep it in mind
+        processed_json = replace(json_str, r",\s*([\}\]])" => s"\1")
         
         try
             data = JSON.parse(processed_json)
             
-            # Normalize keys: check for 'tool', 'name', 'function', 'call'
             tool_name = ""
             for key in ["tool", "name", "function", "tool_name", "call", "command"]
                 if haskey(data, key) && data[key] isa String
@@ -106,7 +103,6 @@ function parse_response(response::String)
                 continue
             end
             
-            # Normalize arguments: check for 'args', 'arguments', 'parameters', 'params', 'input'
             args = Dict()
             for key in ["args", "arguments", "parameters", "params", "input", "props"]
                 if haskey(data, key) && (data[key] isa Dict || data[key] isa AbstractDict)
@@ -115,22 +111,20 @@ function parse_response(response::String)
                 end
             end
             
-            # If no explicit args object, the rest of the object might BE the args
             if isempty(args)
                 args = copy(data)
-                # Remove the tool name key from args
                 for key in ["tool", "name", "function", "tool_name", "call", "command"]
                     delete!(args, key)
                 end
             end
             
-            return (true, tool_name, args)
+            return (true, tool_name, args, thought)
         catch
             continue
         end
     end
     
-    return (false, "", Dict())
+    return (false, "", Dict(), clean_response)
 end
 
 # --- UI Functions ---
@@ -212,95 +206,123 @@ function start_agent_mode()
     history = []
     
     while true
-        # Fancy prompt with current directory
-        current_dir = basename(pwd())
-        if isempty(current_dir)
-            current_dir = "/home/"
-        end
-        
-        prompt_str = "\n$(Crayon(foreground=:green, bold=true))User [$(current_dir)] > $(Crayon(reset=true))"
-        print(prompt_str)
-        
-        user_input = strip(readline())
-        
-        # Handle empty input
-        if isempty(user_input)
-            continue
-        end
-        
-        # Handle Commands
-        if startswith(user_input, "/")
-            cmd = lowercase(user_input)
-            if cmd == "/exit" || cmd == "/quit" || cmd == "/back"
-                println(Crayon(foreground=:dark_gray)("Exiting Agent Mode..."))
-                break
-            elseif cmd == "/help"
-                show_help()
-                continue
-            elseif cmd == "/clear"
-                print_header()
-                continue
-            elseif cmd == "/history"
-                show_history_log(history)
-                continue
-            elseif cmd == "/tools"
-                show_tools()
-                continue
-            else
-                println(Crayon(foreground=:red)("Unknown command: $cmd. Type /help for options."))
-                continue
-            end
-        end
-        
-        # Process regular input
-        print(Crayon(foreground=:yellow, italics=true)("\rThinking..."))
-        
-        # Construct conversation prompt
-        prompt = ""
-        for (role, msg) in history
-            prompt *= "$role: $msg\n"
-        end
-        prompt *= "User: $user_input\nKamila:"
-        
         try
-            response = OllamaInterface.query_ollama(prompt, system_prompt=get_system_prompt())
+            # Fancy prompt with current directory
+            current_dir = basename(pwd())
+            if isempty(current_dir)
+                current_dir = "/home/"
+            end
             
-            # Clear the "Thinking..." line
-            print("\r" * " "^20 * "\r")
+            prompt_str = "\n$(Crayon(foreground=:green, bold=true))User [$(current_dir)] > $(Crayon(reset=true))"
+            print(prompt_str)
             
-            if startswith(response, "❌")
-                println(Crayon(foreground=:red)("Error: " * response))
+            user_input = strip(readline())
+            
+            # Handle empty input
+            if isempty(user_input)
                 continue
             end
             
-            is_tool, tool_name, tool_args = parse_response(response)
+            # Handle Commands
+            if startswith(user_input, "/")
+                cmd = lowercase(user_input)
+                if cmd == "/exit" || cmd == "/quit" || cmd == "/back"
+                    println(Crayon(foreground=:dark_gray)("Exiting Agent Mode..."))
+                    break
+                elseif cmd == "/help"
+                    show_help()
+                    continue
+                elseif cmd == "/clear"
+                    print_header()
+                    continue
+                elseif cmd == "/history"
+                    show_history_log(history)
+                    continue
+                elseif cmd == "/tools"
+                    show_tools()
+                    continue
+                else
+                    println(Crayon(foreground=:red)("Unknown command: $cmd. Type /help for options."))
+                    continue
+                end
+            end
             
-            if is_tool
-                println(Crayon(foreground=:blue)("🛠️  Using tool: "), Crayon(bold=true)(tool_name))
+            # Process regular input
+            # We enter an autonomous loop for this request
+            current_context = ""
+            for (role, msg) in history
+                current_context *= "$role: $msg\n"
+            end
+            current_context *= "User: $user_input\n"
+            
+            iteration = 0
+            while iteration < MAX_ITERATIONS
+                iteration += 1
+                
+                print(Crayon(foreground=:yellow, italics=true)("\rThinking... (Step $iteration, Press Ctrl+C to cancel)"))
                 
                 try
-                    tool_output = AgentTools.execute_tool(tool_name, tool_args)
+                    prompt = current_context * "Kamila:"
+                    response = OllamaInterface.query_ollama(prompt, system_prompt=get_system_prompt())
                     
-                    println(Crayon(foreground=:dark_gray)("   ↳ Tool executed successfully"))
+                    # Clear the "Thinking..." line
+                    print("\r" * " "^60 * "\r")
                     
-                    next_prompt = prompt * "\n" * response * "\nSystem: Tool output: " * string(tool_output) * "\nKamila:"
+                    if startswith(response, "❌")
+                        println(Crayon(foreground=:red)("Error: " * response))
+                        break
+                    end
                     
-                    print(Crayon(foreground=:yellow, italics=true)("\rProcessing result..."))
-                    final_response = OllamaInterface.query_ollama(next_prompt, system_prompt=get_system_prompt())
-                    print("\r" * " "^20 * "\r") # Clear processing line
+                    # Show the raw reasoning/output for analysis
+                    println(Crayon(foreground=:dark_gray)("--- AI Analysis ---"))
+                    println(Crayon(foreground=:dark_gray)(response))
+                    println(Crayon(foreground=:dark_gray)("------------------"))
+
+                    is_tool, tool_name, tool_args, thought = parse_response(response)
                     
-                    format_ai_response(final_response)
+                    if is_tool
+                        println(Crayon(foreground=:blue)("🛠️  Using tool: "), Crayon(bold=true)(tool_name))
+                        
+                        try
+                            tool_output = AgentTools.execute_tool(tool_name, tool_args)
+                            
+                            println(Crayon(foreground=:dark_gray)("   ↳ Tool execution completed"))
+                            
+                            # Add this step to the current context for the next iteration
+                            current_context *= "Kamila: (Tool Call) $response\nSystem: Tool output: $tool_output\n"
+                            # Continue to next iteration to let AI analyze output
+                        catch e
+                            if e isa InterruptException
+                                println(Crayon(foreground=:yellow)("\n⚠️  Tool execution interrupted."))
+                                break
+                            end
+                            println(Crayon(foreground=:red)("❌ Error executing tool: $e"))
+                            current_context *= "Kamila: (Tool Call) $response\nSystem: Error: $e\n"
+                        end
+                    else
+                        # AI gave a final response
+                        format_ai_response(response)
+                        push!(history, ("User", user_input))
+                        push!(history, ("Kamila", response))
+                        break
+                    end
                     
-                    push!(history, ("User", user_input))
-                    push!(history, ("Kamila", final_response))
+                    if iteration == MAX_ITERATIONS
+                        println(Crayon(foreground=:yellow)("⚠️  Maximum autonomous steps reached ($MAX_ITERATIONS)."))
+                        format_ai_response("I've reached my maximum allowed steps for this task. Here is what I've done so far.")
+                        break
+                    end
+                    
                 catch e
-                    println(Crayon(foreground=:red)("❌ Error executing tool: $e"))
+                    if e isa InterruptException
+                        println(Crayon(foreground=:yellow)("\n\n⚠️  Interrupted. Returning to prompt..."))
+                        print("\r" * " "^60 * "\r")
+                        break
+                    else
+                        println(Crayon(foreground=:red)("\n❌ System Error: $e"))
+                        break
+                    end
                 end
-                
-            else
-                format_ai_response(response)
-                push!(history, ("User", user_input))
-                push!(history, ("Kamila", response))
             end
             
             # Maintain history limit
@@ -310,7 +332,16 @@ function start_agent_mode()
             end
             
         catch e
-            println(Crayon(foreground=:red)("\n❌ System Error: $e"))
+            if e isa InterruptException
+                println(Crayon(foreground=:yellow)("\n\n⚠️  Interrupted. Returning to prompt..."))
+                # Clear generated text/thinking lines
+                print("\r" * " "^40 * "\r")
+                continue
+            else
+                println(Crayon(foreground=:red)("\n❌ System Error: $e"))
+                # For significant errors, we might want to see the stack trace in dev
+                # Base.display_error(e, catch_backtrace())
+            end
         end
     end
 end

@@ -25,36 +25,46 @@ function handle_tracker_menu()
     current_dir = pwd()
     
     while true
-        println(Crayon(foreground=:yellow)("\n📂 Current Directory: $current_dir"))
-        is_tracked, _ = CodeTracker.get_tracker_info(current_dir)
-        if is_tracked
-            println(Crayon(foreground=:green)("   (Tracked ✅)"))
-        else
-            println(Crayon(foreground=:dark_gray)("   (Not Tracked)"))
-        end
-        
-        show_tracker_menu()
-        choice = strip(readline(stdin))
-        
-        if choice == "0"
-            break
-        elseif choice == "1"
-            view_status(current_dir)
-        elseif choice == "2"
-            initialize_tracking(current_dir)
-        elseif choice == "3"
-            print("Enter new directory path: ")
-            new_dir = strip(readline(stdin))
-            if !isempty(new_dir)
-                expanded = abspath(expanduser(new_dir))
-                if isdir(expanded)
-                    current_dir = expanded
-                else
-                    UIComponents.show_error("Directory does not exist.")
-                end
+        try
+            println(Crayon(foreground=:yellow)("\n📂 Current Directory: $current_dir"))
+            is_tracked, _ = CodeTracker.get_tracker_info(current_dir)
+            if is_tracked
+                println(Crayon(foreground=:green)("   (Tracked ✅)"))
+            else
+                println(Crayon(foreground=:dark_gray)("   (Not Tracked)"))
             end
-        else
-            UIComponents.show_error("Invalid option.")
+            
+            show_tracker_menu()
+            choice = strip(readline(stdin))
+            
+            if choice == "0"
+                break
+            elseif choice == "1"
+                view_status(current_dir)
+            elseif choice == "2"
+                initialize_tracking(current_dir)
+            elseif choice == "3"
+                print("Enter new directory path: ")
+                new_dir = strip(readline(stdin))
+                if !isempty(new_dir)
+                    expanded = abspath(expanduser(new_dir))
+                    if isdir(expanded)
+                        current_dir = expanded
+                    else
+                        UIComponents.show_error("Directory does not exist.")
+                    end
+                end
+            else
+                UIComponents.show_error("Invalid option.")
+            end
+        catch e
+            if e isa InterruptException
+                println(Crayon(foreground=:yellow)("\n⚠️  Interrupted. Resetting menu..."))
+                sleep(1)
+                continue
+            else
+                rethrow(e)
+            end
         end
     end
 end

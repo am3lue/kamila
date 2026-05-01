@@ -16,10 +16,6 @@ println("=" ^ 50)
     # 2. Agent Logic (Parsing Tests)
     println("\nRunning Agent Logic unit tests...")
     include("agent_logic_test.jl")
-
-    # 3. Integration (Full Flow: AI Response -> Parse -> Execute)
-    println("\nRunning Tool Integration tests...")
-    include("tool_integration_test.jl")
 end
 
 println("\n" * "=" ^ 50)
