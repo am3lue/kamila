@@ -34,7 +34,7 @@ function verify_os_compatibility()
         println("Please run Kamila on a Linux system to continue.")
         exit(1)
     end
-    
+
     println("✅ OS Check Passed: $(string(Sys.KERNEL)) $(readchomp(`uname -r`))")
     return true
 end
@@ -49,10 +49,10 @@ function get_system_info()
         "arch" => Sys.ARCH,
         "word_size" => Sys.WORD_SIZE,
         "cpu_threads" => Sys.CPU_THREADS,
-        "total_memory_gb" => round(Sys.total_memory() / 1024^3, digits=2),
-        "free_memory_gb" => round(Sys.free_memory() / 1024^3, digits=2),
+        "total_memory_gb" => round(Sys.total_memory() / 1024^3, digits = 2),
+        "free_memory_gb" => round(Sys.free_memory() / 1024^3, digits = 2),
         "uptime" => Sys.uptime(),
-        "is_linux" => is_linux_os()
+        "is_linux" => is_linux_os(),
     )
 end
 
@@ -63,10 +63,11 @@ function is_arch_linux()
     if !is_linux_os()
         return false
     end
-    
+
     try
         # Check for Arch Linux specific files
-        return isfile("/etc/arch-release") || isfile("/etc/os-release") && 
+        return isfile("/etc/arch-release") ||
+               isfile("/etc/os-release") &&
                occursin("Arch", read("/etc/os-release", String))
     catch
         return false
@@ -80,7 +81,7 @@ function get_linux_distro()
     if !is_linux_os()
         return "Unknown"
     end
-    
+
     try
         # Try to read distribution info from /etc/os-release
         if isfile("/etc/os-release")
@@ -91,7 +92,7 @@ function get_linux_distro()
                 end
             end
         end
-        
+
         # Fallback to checking specific files
         if isfile("/etc/arch-release")
             return "Arch Linux"
@@ -116,7 +117,7 @@ function generate_compatibility_report()
     info = get_system_info()
     distro = get_linux_distro()
     is_arch = is_arch_linux()
-    
+
     report = []
     push!(report, "🔍 System Compatibility Report")
     push!(report, "")
@@ -134,9 +135,15 @@ function generate_compatibility_report()
     push!(report, "")
     push!(report, "Compatibility:")
     push!(report, "  • Linux Compatible: $(info["is_linux"] ? "✅ Yes" : "❌ No")")
-    push!(report, "  • Arch Linux: $(is_arch ? "✅ Yes" : "⚠️  No (other distros supported)")")
-    push!(report, "  • Kamila Status: $(info["is_linux"] ? "✅ Fully Supported" : "❌ Not Supported")")
-    
+    push!(
+        report,
+        "  • Arch Linux: $(is_arch ? "✅ Yes" : "⚠️  No (other distros supported)")",
+    )
+    push!(
+        report,
+        "  • Kamila Status: $(info["is_linux"] ? "✅ Fully Supported" : "❌ Not Supported")",
+    )
+
     return join(report, "\n")
 end
 

@@ -16,7 +16,7 @@ using Test
     if !isdir(desktop_path)
         mkpath(desktop_path)
     end
-    
+
     test_file = joinpath(desktop_path, "test_safe_file.txt")
     write(test_file, "This is safe content")
 
@@ -37,18 +37,21 @@ using Test
         # Test 3: Write allowed file
         println("Testing allowed file write...")
         new_content = "Updated content"
-        result = AgentTools.write_file(Dict("file_path" => test_file, "content" => new_content))
+        result =
+            AgentTools.write_file(Dict("file_path" => test_file, "content" => new_content))
         @test startswith(result, "Successfully wrote")
         @test read(test_file, String) == new_content
 
         # Test 4: Write restricted file
         println("Testing restricted file write...")
         restricted_write = "/tmp/evil_script.sh" # /tmp is not in ALLOWED_DIRS
-        result = AgentTools.write_file(Dict("file_path" => restricted_write, "content" => "evil"))
+        result = AgentTools.write_file(
+            Dict("file_path" => restricted_write, "content" => "evil"),
+        )
         @test startswith(result, "Error writing file")
         @test occursin("outside of allowed directories", result)
     end
 
     # Clean up
-    rm(test_file, force=true)
+    rm(test_file, force = true)
 end

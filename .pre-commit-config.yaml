@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/julia-actions/JuliaFormatter
+    rev: v1.0.0
+    hooks:
+      - id: julia-formatter
+        language: julia
+
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v8.57.0
+    hooks:
+      - id: eslint
+        files: ^tui/src/.*\.js$
+        args: ['--config', 'tui/.eslintrc.cjs']
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-json
+        files: ^tui/package\.json$

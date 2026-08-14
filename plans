@@ -1,0 +1,1 @@
+The agent.query streaming handler — do you want the full agent loop with tool calls exposed through the bridge, or just the basic "send prompt → get streaming response" for now? The full agent loop would mean the JS TUI delegates the entire agent execution to Julia, receiving tool_call and tool_result events between stream chunks.

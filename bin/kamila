@@ -1,94 +1,101 @@
 #!/bin/bash
 
-# Kamila Launch Script
-# Personal Terminal Assistant
+# Kamila Launch Script v0.2.0
+# Personal Terminal Assistant — JS TUI + Julia Backend
 
-# Get the directory where this script is located
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Change to project directory
 cd "$PROJECT_DIR"
 
-# Set up environment
 export JULIA_PROJECT="$PROJECT_DIR"
 
-# Check if Julia is available
-if ! command -v julia &> /dev/null; then
-    echo "❌ Julia is not installed or not in PATH"
-    echo "Please install Julia from https://julialang.org/downloads/"
-    exit 1
-fi
+# Default log file under the XDG state dir; respects KAMILA_LOG_FILE override.
+setup_logging() {
+    if [ -z "${KAMILA_LOG_FILE:-}" ]; then
+        LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/kamila"
+        mkdir -p "$LOG_DIR"
+        export KAMILA_LOG_FILE="$LOG_DIR/kamila.log"
+    fi
+    return 0
+}
 
-# Function to show help
 show_help() {
-    echo "Kamila - Personal Terminal Assistant"
+    echo "Kamila v0.2.0 — Personal Terminal Assistant"
     echo ""
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
     echo "  --help, -h        Show this help message"
     echo "  --version, -v     Show version information"
-    echo "  --test, -t        Run tests"
+    echo "  --bridge          Start Julia backend in JSON-RPC bridge mode"
     echo "  --setup           Run initial setup"
-    echo "  --demo            Show demo"
     echo ""
     echo "Examples:"
-    echo "  $0                Launch Kamila"
-    echo "  $0 --test         Run tests"
-    echo "  $0 --demo         Show demo"
+    echo "  $0                Launch Kamila TUI"
+    echo "  $0 --setup        Run setup"
 }
 
-# Function to show version
 show_version() {
-    echo "Kamila v0.1.0"
+    echo "Kamila v0.2.0"
     echo "Personal Terminal Assistant"
     echo "K.A.M.I.L.A: Kind, Adaptive, Mind, Integrating, Logic, Assistant"
 }
 
-# Function to run tests
-run_tests() {
-    echo "🧪 Running Kamila tests..."
-    julia --project="$PROJECT_DIR" -e "include(\"test/runtests.jl\"); KamilaTests.run_all_tests()"
-}
-
-# Function to run setup
 run_setup() {
-    echo "🔧 Initial setup..."
-    
-    # Install Julia packages
+    echo "Kamila setup..."
+
     echo "Installing Julia packages..."
     julia --project="$PROJECT_DIR" -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"
-    
-    # Setup Ollama model if Ollama is available
+
+    echo "Installing Node.js TUI dependencies..."
+    if command -v node &> /dev/null; then
+        (cd "$PROJECT_DIR/tui" && npm install)
+    else
+        echo "Node.js not found. Install from https://nodejs.org/"
+    fi
+
     if command -v ollama &> /dev/null; then
-        echo "Setting up Ollama model..."
-        if [ -f "Modelfile" ]; then
-            ollama create kamila -f Modelfile
-            echo "✅ Kamila model created successfully"
+        echo "Setting up Ollama models..."
+        if [ -f "config/Modelfile.online" ]; then
+            ollama create kamila1 -f config/Modelfile.online 2>/dev/null && echo "kamila1 (online) created" || echo "kamila1 creation failed"
         else
-            echo "⚠️  Modelfile not found. Please create it manually."
+            echo "config/Modelfile.online not found"
+        fi
+        if [ -f "config/Modelfile.offline" ]; then
+            ollama create kamila2 -f config/Modelfile.offline 2>/dev/null && echo "kamila2 (offline) created" || echo "kamila2 creation failed"
+        else
+            echo "config/Modelfile.offline not found"
         fi
     else
-        echo "⚠️  Ollama not found. AI features will be limited."
-        echo "   Install Ollama from https://ollama.ai/"
+        echo "Ollama not found. AI features limited."
     fi
-    
-    echo "✅ Setup completed"
+
+    echo "Setup complete."
 }
 
-# Function to show demo
-show_demo() {
-    julia --project="$PROJECT_DIR" -e "include(\"test/runtests.jl\"); KamilaTests.demo_kamila()"
+launch_tui() {
+    setup_logging
+    if ! command -v node &> /dev/null; then
+        echo "Node.js not found. Install from https://nodejs.org/"
+        echo "Falling back to Julia bridge mode..."
+        julia --project="$PROJECT_DIR" -e "include(\"src/Kamila.jl\"); using .Kamila; Kamila.KamilaBridge.run_bridge(; read_timeout=86400.0)"
+        exit $?
+    fi
+
+    if [ ! -d "tui/node_modules" ]; then
+        echo "TUI dependencies not installed. Running npm install..."
+        (cd tui && npm install) || {
+            echo "npm install failed. Falling back to Julia bridge mode..."
+            julia --project="$PROJECT_DIR" -e "include(\"src/Kamila.jl\"); using .Kamila; Kamila.KamilaBridge.run_bridge(; read_timeout=86400.0)"
+            exit $?
+        }
+    fi
+
+    TERM=xterm-256color node tui/index.js 2>/dev/null
+    exit $?
 }
 
-# Function to run quick compatibility test
-run_compatibility_test() {
-    echo "🔍 Running compatibility test..."
-    julia --project="$PROJECT_DIR" -e "include(\"test/runtests.jl\"); KamilaTests.test_system_compatibility()"
-}
-
-# Parse command line arguments
 case "${1:-}" in
     --help|-h)
         show_help
@@ -98,30 +105,22 @@ case "${1:-}" in
         show_version
         exit 0
         ;;
-    --test|-t)
-        run_tests
-        exit 0
-        ;;
     --setup)
         run_setup
         exit 0
         ;;
-    --demo)
-        show_demo
-        exit 0
-        ;;
-    --check)
-        run_compatibility_test
-        exit 0
+    --bridge)
+        shift
+        setup_logging
+        julia --project="$PROJECT_DIR" -e "include(\"src/Kamila.jl\"); using .Kamila; Kamila.KamilaBridge.run_bridge(; read_timeout=86400.0)"
+        exit $?
         ;;
     "")
-        # No arguments - launch Kamila
-        echo "🚀 Starting Kamila..."
-        julia --project="$PROJECT_DIR" src/Kamila.jl
+        launch_tui
         ;;
     *)
-        echo "❌ Unknown option: $1"
-        echo "Use --help for usage information"
+        echo "Unknown option: $1"
+        echo "Use --help for usage"
         exit 1
         ;;
 esac

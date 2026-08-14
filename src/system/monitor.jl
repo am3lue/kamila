@@ -7,10 +7,17 @@ module SystemMonitor
 
 # using ..Kamila
 using ..OSCheck
+using ..KamilaLog
 using Dates
 using Printf
+using HTTP
 
-export get_system_stats, generate_daily_report, get_system_health, monitor_resources
+export get_system_stats,
+    generate_daily_report,
+    get_system_health,
+    monitor_resources,
+    get_thermal_info,
+    get_network_stats
 
 """
 Calculate system health based on stats (Internal)
@@ -19,10 +26,10 @@ function _calculate_health(stats::Dict)
     try
         # Check memory usage
         memory_usage = stats["memory"]["used_percent"]
-        
-        # Check CPU usage
-        cpu_usage = stats["cpu"]["usage_percent"]
-        
+
+        # Check CPU usage (may be unavailable on first sample)
+        cpu_usage = get(get(stats, "cpu", Dict()), "usage_percent", nothing)
+
         # Check disk usage
         disk_usage = 0
         if haskey(stats["disk"], "root") && haskey(stats["disk"]["root"], "use_percent")
@@ -31,35 +38,45 @@ function _calculate_health(stats::Dict)
                 disk_usage = parse(Int, replace(disk_percent, "%" => ""))
             end
         end
-        
+
         # Health scoring
         health_score = 100
-        
+
         if memory_usage > 90
             health_score -= 30
         elseif memory_usage > 80
             health_score -= 15
         end
-        
-        if cpu_usage > 90
-            health_score -= 20
-        elseif cpu_usage > 70
-            health_score -= 10
+
+        if cpu_usage !== nothing
+            if cpu_usage > 90
+                health_score -= 20
+            elseif cpu_usage > 70
+                health_score -= 10
+            end
         end
-        
+
         if disk_usage > 90
             health_score -= 25
         elseif disk_usage > 80
             health_score -= 15
         end
-        
+
         return Dict(
             "score" => max(health_score, 0),
             "status" => health_score >= 80 ? "good" : health_score >= 60 ? "fair" : "poor",
-            "issues" => get_health_issues(memory_usage, cpu_usage, disk_usage)
+            "issues" => get_health_issues(
+                memory_usage,
+                cpu_usage === nothing ? 0.0 : cpu_usage,
+                disk_usage,
+            ),
         )
     catch e
-        return Dict("score" => 0, "status" => "unknown", "issues" => ["Failed to assess health"])
+        return Dict(
+            "score" => 0,
+            "status" => "unknown",
+            "issues" => ["Failed to assess health"],
+        )
     end
 end
 
@@ -69,46 +86,51 @@ Get comprehensive system statistics
 function get_system_stats()
     try
         info = OSCheck.get_system_info()
-        
+
         # Get CPU usage (approximate)
         cpu_usage = get_cpu_usage()
-        
+
         # Get disk usage
         disk_usage = get_disk_usage()
-        
+
         # Get process count
         process_count = get_process_count()
-        
+
         # Get system uptime in human readable format
         uptime_str = format_uptime(info["uptime"])
-        
+
         stats = Dict(
             "os_info" => info,
             "cpu" => Dict(
                 "usage_percent" => cpu_usage,
                 "threads" => info["cpu_threads"],
-                "architecture" => info["arch"]
+                "architecture" => info["arch"],
             ),
             "memory" => Dict(
                 "total_gb" => info["total_memory_gb"],
                 "free_gb" => info["free_memory_gb"],
-                "used_percent" => round(((info["total_memory_gb"] - info["free_memory_gb"]) / info["total_memory_gb"]) * 100, digits=1)
+                "used_percent" => round(
+                    (
+                        (info["total_memory_gb"] - info["free_memory_gb"]) /
+                        info["total_memory_gb"]
+                    ) * 100,
+                    digits = 1,
+                ),
             ),
             "disk" => disk_usage,
-            "processes" => Dict(
-                "count" => process_count,
-                "running" => get_running_processes()
-            ),
-            "uptime" => Dict(
-                "seconds" => info["uptime"],
-                "formatted" => uptime_str
-            ),
-            "timestamp" => string(now())
+            "processes" =>
+                Dict("count" => process_count, "running" => get_running_processes()),
+            "uptime" => Dict("seconds" => info["uptime"], "formatted" => uptime_str),
+            "timestamp" => string(now()),
         )
-        
+
+        # Add thermal and network info
+        stats["thermal"] = get_thermal_info()
+        stats["network"] = get_network_stats()
+
         # Calculate and add health status
         stats["is_healthy"] = _calculate_health(stats)
-        
+
         return stats
     catch e
         return Dict("error" => "Failed to get system stats: $e")
@@ -123,45 +145,73 @@ function get_system_health()
     if haskey(stats, "is_healthy")
         return stats["is_healthy"]
     else
-        return Dict("score" => 0, "status" => "unknown", "issues" => ["Failed to retrieve system stats"])
+        return Dict(
+            "score" => 0,
+            "status" => "unknown",
+            "issues" => ["Failed to retrieve system stats"],
+        )
     end
 end
 
 """
-Get CPU usage percentage (approximate method)
+Get CPU usage percentage via delta sampling of `/proc/stat`.
+
+Two samples are required to measure usage; the first call after a reset records
+the baseline and returns `nothing`. Subsequent calls return the utilization
+between samples (0–100). Returns `nothing` whenever `/proc/stat` is unreadable —
+never a fabricated value.
 """
 function get_cpu_usage()
+    sample = _read_cpu_sample()
+    sample === nothing && return nothing
+    prev = _CPU_SAMPLE[]
+    if prev === nothing
+        _CPU_SAMPLE[] = sample
+        return nothing
+    end
+    _CPU_SAMPLE[] = sample
+    d_total = sample[1] - prev[1]
+    d_idle = sample[2] - prev[2]
+    d_total <= 0 && return nothing
+    usage = (1.0 - d_idle / d_total) * 100
+    return round(clamp(usage, 0.0, 100.0), digits = 1)
+end
+
+"""
+Record the current `/proc/stat` snapshot as the delta baseline without reporting
+a value. Callers (bridge/TUI startup) use this so the first user-facing
+`system.status` is already a real delta instead of `unavailable`.
+"""
+function prime_cpu_baseline()
+    sample = _read_cpu_sample()
+    sample === nothing || (_CPU_SAMPLE[] = sample)
+    return nothing
+end
+
+"""
+Clear the CPU delta baseline (used by tests to exercise first-call semantics).
+"""
+function reset_cpu_baseline()
+    _CPU_SAMPLE[] = nothing
+    return nothing
+end
+
+# Last CPU sample: (total_jiffies, idle_jiffies). `nothing` = no baseline yet.
+const _CPU_SAMPLE = Ref{Union{Tuple{UInt64,UInt64},Nothing}}(nothing)
+
+# Read the aggregate `cpu` line as (total, idle) jiffies, or `nothing`.
+function _read_cpu_sample()
+    isfile("/proc/stat") || return nothing
     try
-        # Read /proc/stat for CPU usage
-        if isfile("/proc/stat")
-            stat_content = read("/proc/stat", String)
-            lines = split(stat_content, "\n")
-            
-            # Parse the first line (cpu aggregate)
-            cpu_line = first(lines)
-            if startswith(cpu_line, "cpu ")
-                fields = split(cpu_line)[2:end]  # Skip "cpu" label
-                
-                if length(fields) >= 8
-                    user = parse(Int, fields[1])
-                    nice = parse(Int, fields[2])
-                    system = parse(Int, fields[3])
-                    idle = parse(Int, fields[4])
-                    
-                    total = user + nice + system + idle
-                    
-                    if total > 0
-                        usage = ((total - idle) / total) * 100
-                        return round(usage, digits=1)
-                    end
-                end
-            end
-        end
-        
-        # Fallback: return a reasonable estimate
-        return round(rand(10:80), digits=1)
+        cpu_line = first(split(read("/proc/stat", String), "\n"))
+        startswith(cpu_line, "cpu ") || return nothing
+        fields = split(cpu_line)[2:end]
+        length(fields) >= 4 || return nothing
+        vals = [tryparse(Int, f) for f in fields]
+        any(v -> v === nothing, vals) && return nothing
+        return (UInt64(sum(vals)), UInt64(vals[4]))
     catch
-        return 0.0
+        return nothing
     end
 end
 
@@ -172,32 +222,71 @@ function get_disk_usage()
     try
         home_path = homedir()
         usage_info = Dict()
-        
+
         # Get home directory usage
         if isdir(home_path)
             home_stats = get_directory_usage(home_path)
-            usage_info["home"] = home_stats
+            usage_info["home"] =
+                home_stats === nothing ?
+                Dict("path" => home_path, "error" => "unavailable") : home_stats
         end
-        
+
         # Get root filesystem usage
         root_stats = get_filesystem_usage("/")
         usage_info["root"] = root_stats
-        
+
         return usage_info
     catch e
+        KamilaLog.warn("Failed to get disk usage: $e"; mod = "monitor")
         return Dict("error" => "Failed to get disk usage: $e")
     end
 end
 
 """
-Get directory usage statistics
+Get directory usage statistics.
+
+Results are cached per-path for `_DIR_CACHE_TTL` seconds and invalidated when
+the top directory's mtime changes, so repeated reads don't re-walk the tree.
+Returns `nothing` when the path cannot be measured.
 """
 function get_directory_usage(path::String)
+    key = abspath(path)
+    now = time()
+
+    cached = get(_DIR_CACHE, key, nothing)
+    if cached !== nothing
+        cached_at, cached_mtime, result = cached
+        if (now - cached_at) < _DIR_CACHE_TTL[] && _dir_mtime(key) == cached_mtime
+            return result
+        end
+    end
+
+    result = _walk_directory(path)
+    if result !== nothing
+        _DIR_CACHE[key] = (now, _dir_mtime(key), result)
+    end
+    return result
+end
+
+# Directory-usage cache: path => (cached_at::Float64, mtime::Float64, result::Dict)
+const _DIR_CACHE = Dict{String,Tuple{Float64,Float64,Dict}}()
+const _DIR_CACHE_TTL = Ref{Float64}(300.0)  # 5 minutes
+
+function _dir_mtime(path::String)
     try
-        total_size = 0
-        file_count = 0
-        dir_count = 0
-        
+        return Float64(mtime(path))
+    catch
+        return 0.0
+    end
+end
+
+function _walk_directory(path::String)
+    isdir(path) || return nothing
+    total_size = 0
+    file_count = 0
+    dir_count = 0
+    walked = false
+    try
         for (root, dirs, files) in walkdir(path)
             for file in files
                 try
@@ -209,19 +298,31 @@ function get_directory_usage(path::String)
                 end
             end
             dir_count += length(dirs)
+            walked = true
         end
-        
+    catch e
+        return nothing
+    end
+
+    if !walked && isdir(path) && isempty(readdir(path))
         return Dict(
             "path" => path,
-            "total_bytes" => total_size,
-            "total_mb" => round(total_size / 1024^2, digits=2),
-            "total_gb" => round(total_size / 1024^3, digits=2),
-            "files" => file_count,
-            "directories" => dir_count
+            "total_bytes" => 0,
+            "total_mb" => 0.0,
+            "total_gb" => 0.0,
+            "files" => 0,
+            "directories" => 0,
         )
-    catch e
-        return Dict("path" => path, "error" => "Failed to calculate usage: $e")
     end
+
+    return Dict(
+        "path" => path,
+        "total_bytes" => total_size,
+        "total_mb" => round(total_size / 1024^2, digits = 2),
+        "total_gb" => round(total_size / 1024^3, digits = 2),
+        "files" => file_count,
+        "directories" => dir_count,
+    )
 end
 
 """
@@ -232,7 +333,7 @@ function get_filesystem_usage(mount_point::String)
         # Try using df command
         result = read(`bash -c "df -h $(mount_point)"`, String)
         lines = split(result, "\n")
-        
+
         if length(lines) >= 2
             fields = split(lines[2])
             if length(fields) >= 5
@@ -242,29 +343,34 @@ function get_filesystem_usage(mount_point::String)
                     "used" => fields[3],
                     "available" => fields[4],
                     "use_percent" => fields[5],
-                    "mount_point" => fields[6]
+                    "mount_point" => fields[6],
                 )
             end
         end
-        
+
         # Fallback calculation
+        KamilaLog.warn(
+            "df failed or unparseable for $mount_point — returning unknown usage";
+            mod = "monitor",
+        )
         return Dict(
             "filesystem" => "unknown",
             "size" => "unknown",
-            "used" => "unknown", 
+            "used" => "unknown",
             "available" => "unknown",
             "use_percent" => "unknown",
-            "mount_point" => mount_point
+            "mount_point" => mount_point,
         )
     catch
         # If df fails, return basic info
+        KamilaLog.warn("df command failed for $mount_point"; mod = "monitor")
         return Dict(
             "filesystem" => "local",
             "size" => "unknown",
             "used" => "unknown",
-            "available" => "unknown", 
+            "available" => "unknown",
             "use_percent" => "unknown",
-            "mount_point" => mount_point
+            "mount_point" => mount_point,
         )
     end
 end
@@ -304,7 +410,7 @@ function format_uptime(seconds::Float64)
     days = floor(Int, seconds / 86400)
     hours = floor(Int, (seconds % 86400) / 3600)
     minutes = floor(Int, (seconds % 3600) / 60)
-    
+
     if days > 0
         return "$days days, $hours hours, $minutes minutes"
     elseif hours > 0
@@ -319,19 +425,19 @@ Get list of health issues
 """
 function get_health_issues(memory_usage::Float64, cpu_usage::Float64, disk_usage::Int)
     issues = String[]
-    
+
     if memory_usage > 80
         push!(issues, "High memory usage ($(memory_usage)%)")
     end
-    
+
     if cpu_usage > 70
         push!(issues, "High CPU usage ($(cpu_usage)%)")
     end
-    
+
     if disk_usage > 80
         push!(issues, "High disk usage ($disk_usage%)")
     end
-    
+
     return issues
 end
 
@@ -342,43 +448,57 @@ function generate_daily_report()
     try
         stats = get_system_stats()
         health = stats["is_healthy"]
-        
+
         report = []
         push!(report, "📊 Daily System Report - $(string(Date(now())))")
         push!(report, "")
-        
+
         # System Overview
         push!(report, "🖥️  System Overview:")
-        push!(report, "  • OS: $(stats["os_info"]["os_name"]) $(stats["os_info"]["kernel_version"])")
+        push!(
+            report,
+            "  • OS: $(stats["os_info"]["os_name"]) $(stats["os_info"]["kernel_version"])",
+        )
         push!(report, "  • Architecture: $(stats["os_info"]["arch"])")
         push!(report, "  • Uptime: $(stats["uptime"]["formatted"])")
         push!(report, "  • Processes: $(stats["processes"]["running"])")
         push!(report, "")
-        
+
         # Performance Metrics
         push!(report, "⚡ Performance Metrics:")
-        push!(report, "  • CPU Usage: $(stats["cpu"]["usage_percent"])")
-        push!(report, "  • Memory Usage: $(stats["memory"]["used_percent"])% ($(stats["memory"]["free_gb"]) GB free)")
+        cpu_val = get(get(stats, "cpu", Dict()), "usage_percent", nothing)
+        cpu_render = cpu_val === nothing ? "unavailable" : "$(cpu_val)%"
+        push!(report, "  • CPU Usage: $cpu_render")
+        push!(
+            report,
+            "  • Memory Usage: $(stats["memory"]["used_percent"])% ($(stats["memory"]["free_gb"]) GB free)",
+        )
         push!(report, "")
-        
+
         # Storage
         push!(report, "💾 Storage:")
         if haskey(stats["disk"], "root")
             root_disk = stats["disk"]["root"]
-            push!(report, "  • Root: $(root_disk["used"])/$(root_disk["size"]) ($(root_disk["use_percent"]))")
+            push!(
+                report,
+                "  • Root: $(root_disk["used"])/$(root_disk["size"]) ($(root_disk["use_percent"]))",
+            )
         end
-        
+
         if haskey(stats["disk"], "home")
             home_disk = stats["disk"]["home"]
-            push!(report, "  • Home: $(home_disk["total_gb"]) GB used ($(home_disk["files"]) files)")
+            push!(
+                report,
+                "  • Home: $(home_disk["total_gb"]) GB used ($(home_disk["files"]) files)",
+            )
         end
         push!(report, "")
-        
+
         # Health Status
         push!(report, "🏥 Health Status:")
         push!(report, "  • Overall Score: $(health["score"])/100")
         push!(report, "  • Status: $(uppercasefirst(health["status"])) ")
-        
+
         if !isempty(health["issues"])
             push!(report, "  • Issues:")
             for issue in health["issues"]
@@ -386,7 +506,7 @@ function generate_daily_report()
             end
         end
         push!(report, "")
-        
+
         # Recommendations
         push!(report, "💡 Recommendations:")
         if health["score"] < 80
@@ -404,7 +524,7 @@ function generate_daily_report()
             push!(report, "  • System is running well")
             push!(report, "  • Keep up the good maintenance habits")
         end
-        
+
         return join(report, "\n")
     catch e
         return "❌ Failed to generate daily report: $e"
@@ -412,27 +532,31 @@ function generate_daily_report()
 end
 
 """
-Monitor system resources in real-time (placeholder)
+Monitor system resources in real-time. Progress goes to the log (stderr-backed),
+never stdout, so it is safe under the bridge protocol.
 """
-function monitor_resources(duration::Int=60)
-    println("🔍 Monitoring system resources for $duration seconds...")
-    println("Press Ctrl+C to stop monitoring")
-    println()
-    
+function monitor_resources(duration::Int = 60)
+    KamilaLog.info(
+        "Monitoring system resources for $duration seconds (Ctrl+C to stop)";
+        mod = "monitor",
+    )
+
     try
-        for i in 1:duration
+        for i = 1:duration
             stats = get_system_stats()
             timestamp = string(now())
-            
-            print("\r[$timestamp] CPU: $(stats["cpu"]["usage_percent"])% | Memory: $(stats["memory"]["used_percent"])% | Processes: $(stats["processes"]["running"])")
-            
+            cpu = get(get(stats, "cpu", Dict()), "usage_percent", nothing)
+            mem = get(get(stats, "memory", Dict()), "used_percent", 0)
+            procs = get(get(stats, "processes", Dict()), "running", 0)
+            KamilaLog.info(
+                "[$timestamp] CPU: $(cpu === nothing ? "unavailable" : cpu)% | Memory: $(mem)% | Processes: $procs";
+                mod = "monitor",
+            )
             sleep(1)
         end
-        println()
-        println("✅ Monitoring completed")
+        KamilaLog.info("Monitoring completed"; mod = "monitor")
     catch e
-        println()
-        println("⚠️  Monitoring interrupted: $e")
+        KamilaLog.error("Monitoring interrupted: $e"; mod = "monitor")
     end
 end
 
@@ -442,7 +566,7 @@ Get system alerts based on thresholds
 function get_system_alerts()
     stats = get_system_stats()
     alerts = String[]
-    
+
     # Memory alerts
     memory_usage = stats["memory"]["used_percent"]
     if memory_usage > 90
@@ -450,15 +574,17 @@ function get_system_alerts()
     elseif memory_usage > 80
         push!(alerts, "⚠️  WARNING: Memory usage at $(memory_usage)%")
     end
-    
+
     # CPU alerts
-    cpu_usage = stats["cpu"]["usage_percent"]
-    if cpu_usage > 90
-        push!(alerts, "🚨 CRITICAL: CPU usage at $(cpu_usage)%")
-    elseif cpu_usage > 80
-        push!(alerts, "⚠️  WARNING: CPU usage at $(cpu_usage)%")
+    cpu_usage = get(get(stats, "cpu", Dict()), "usage_percent", nothing)
+    if cpu_usage !== nothing
+        if cpu_usage > 90
+            push!(alerts, "🚨 CRITICAL: CPU usage at $(cpu_usage)%")
+        elseif cpu_usage > 80
+            push!(alerts, "⚠️  WARNING: CPU usage at $(cpu_usage)%")
+        end
     end
-    
+
     # Disk alerts
     if haskey(stats["disk"], "root")
         root_disk = stats["disk"]["root"]
@@ -471,8 +597,96 @@ function get_system_alerts()
             end
         end
     end
-    
+
     return alerts
+end
+
+"""
+Get thermal zone temperatures from sysfs
+"""
+function get_thermal_info()
+    zones = Dict[]
+    base = "/sys/class/thermal"
+    if !isdir(base)
+        return zones
+    end
+    for entry in readdir(base)
+        if !startswith(entry, "thermal_zone")
+            continue
+        end
+        zone_path = joinpath(base, entry)
+        type_path = joinpath(zone_path, "type")
+        temp_path = joinpath(zone_path, "temp")
+        if isfile(type_path) && isfile(temp_path)
+            try
+                zone_type = strip(read(type_path, String))
+                raw_temp = strip(read(temp_path, String))
+                temp_c = parse(Float64, raw_temp) / 1000.0
+                push!(
+                    zones,
+                    Dict(
+                        "zone" => entry,
+                        "type" => zone_type,
+                        "temp_c" => round(temp_c, digits = 1),
+                    ),
+                )
+            catch
+            end
+        end
+    end
+    return zones
+end
+
+"""
+Get network interface statistics from /proc/net/dev
+"""
+function get_network_stats()
+    interfaces = Dict[]
+    try
+        content = read("/proc/net/dev", String)
+        lines = split(content, "\n")
+        for line in lines[3:end]  # Skip header lines
+            line = strip(line)
+            isempty(line) && continue
+            parts = split(line, ":")
+            length(parts) < 2 && continue
+            iface = strip(parts[1])
+            startswith(iface, "lo") && continue  # Skip loopback
+            stats = split(strip(parts[2]))
+            length(stats) < 10 && continue
+            push!(
+                interfaces,
+                Dict(
+                    "iface" => iface,
+                    "rx_bytes" => parse(Float64, stats[1]),
+                    "rx_packets" => parse(Float64, stats[2]),
+                    "rx_errors" => parse(Float64, stats[3]),
+                    "rx_drops" => parse(Float64, stats[4]),
+                    "tx_bytes" => parse(Float64, stats[9]),
+                    "tx_packets" => parse(Float64, stats[10]),
+                    "tx_errors" => parse(Float64, stats[11]),
+                    "tx_drops" => parse(Float64, stats[12]),
+                ),
+            )
+        end
+    catch
+    end
+    return interfaces
+end
+
+"""
+Measure internet latency via TCP to 1.1.1.1:80 (Cloudflare).
+Returns milliseconds, or `nothing` when unreachable.
+"""
+function get_internet_latency()
+    try
+        start = time_ns()
+        HTTP.request("HEAD", "http://1.1.1.1", timeout = 3)
+        elapsed = (time_ns() - start) / 1_000_000
+        return round(elapsed, digits = 1)
+    catch
+        return nothing
+    end
 end
 
 end # module

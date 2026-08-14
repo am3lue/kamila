@@ -33,6 +33,7 @@ Gamify your productivity.
 *   **Achievements**: Unlock achievements by completing tasks and goals (e.g., "Goal Completed").
 *   **Productivity Stats**: View your completion rates and "useful activity" percentage.
 *   **Memory Summary**: Get a snapshot of your overall progress.
+*   **Storage**: SQLite database (schema v1) with WAL mode for crash safety; JSON export/compat view at `~/.kamila_memory.json` for backup and portability.
 
 ### 🖥️ 3. System Status
 Monitor your Linux machine's health.
@@ -54,15 +55,29 @@ Powered by Ollama (local AI).
 *   **Productivity Suggestions**: Get AI analysis of your work habits.
 *   **File Explanation**: Ask AI to explain the contents of any text file on your system.
 *   **Daily Report**: Receive an encouraging AI-generated summary of your day.
-*   **Connection**: Requires `ollama serve` to be running. Kamila uses the `kamila` custom model (based on qwen2.5-coder).
+*   **Connection**: Requires `ollama serve` to be running. Kamila routes to `kamila1` (online, gpt-oss cloud) first and automatically falls back to `kamila2` (offline, local qwen3:8b) if the online model errors or times out (default 15s, tunable via `KAMILA_CURL_MAX_TIME`).
 
-### ⚙️ 6. Settings
+### 🧠 6. Thinking Display
+When the model emits reasoning (e.g. gpt-oss `message.thinking`), Kamila shows it live as a dimmed `🧠 Thinking… (click to expand)` line.
+*   **Click** the thinking line to expand or collapse the full reasoning text.
+*   **Click any other message line** to copy it to the clipboard.
+*   Reasoning is never included in saved chat history or the final answer.
+
+### 📝 7. Chat Input & Recall
+The chat input is a multiline text area.
+*   **Enter** sends your message.
+*   **Ctrl+O** inserts a newline (for multi-line prompts).
+*   **↑ / ↓** (or **Ctrl+P / Ctrl+N**) cycle through your previously submitted prompts — the prompt recall ring.
+*   **Ctrl+C** (with the chat log focused) copies the last assistant response; **Ctrl+↑/↓** scroll the chat log.
+*   Chat history is restored automatically on launch from the backend session, so previous exchanges reappear when you restart the TUI.
+
+### ⚙️ 8. Settings
 Configure your experience.
 *   **Change Password**: Update your login credentials.
 *   **Security Report**: Verify that Kamila's file access restrictions are active.
 *   **Reset Auth**: Clear your login configuration.
 
-### 🤖 7. Agent Mode
+### 🤖 9. Agent Mode
 Interactive AI Agent.
 *   **Chat Interface**: Talk to Kamila naturally.
 *   **Tools**: Kamila can use tools to Check files, Run commands, and Manage tasks for you.
@@ -73,11 +88,16 @@ Interactive AI Agent.
 *   **Blank Screens/UI Glitches**: Ensure your terminal supports true color and standard ANSI escape codes.
 *   **AI Not Working**: Verify `ollama` is installed and the server is running (`ollama serve`). Run "Test AI connection" in the AI menu.
 *   **File Access Errors**: Kamila is sandboxed. It can only read/write in your home directory's Desktop, Documents, Pictures, Downloads, Trash, and Codes folders.
+*   **Memory/Database Issues**: Memory is stored in SQLite at `~/.local/state/kamila/kamila.db`. The JSON compat view is at `~/.kamila_memory.json`. If corruption is suspected, delete the DB file (it will be recreated from the JSON view on next start) or run `./bin/kamila --check` for diagnostics.
 
 ## 5. Keyboard Shortcuts
 *   **0-6**: Select menu options.
-*   **Enter**: Confirm selections or dismiss prompts.
-*   **Ctrl+C**: Stop monitoring processes (safely handles interruptions).
+*   **Enter**: Send message / confirm selections.
+*   **Ctrl+O**: Newline in the chat input.
+*   **↑ / ↓ (or Ctrl+P / Ctrl+N)**: Cycle prompt recall ring.
+*   **Ctrl+C**: Copy last response (chat log focused) / stop monitoring processes.
+*   **Tab**: Focus the chat input.
+*   **F5**: Refresh panels, **F10**: toggle logs, **F11**: toggle permissions panel, **Ctrl+T**: toggle side panels.
 
 ---
-*Created by Kamila Assistant Dev Team*
+*Created by Blue Francis*

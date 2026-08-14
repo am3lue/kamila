@@ -1,100 +1,66 @@
 #!/bin/bash
 
-# Kamila Setup Script
-# Automated setup for Kamila Personal Terminal Assistant
+# Kamila Setup Script v0.2.0
 
-echo "🚀 Kamila Setup Script"
-echo "====================="
+echo "Kamila Setup Script"
+echo "==================="
 
-# Check if Julia is installed
 if ! command -v julia &> /dev/null; then
-    echo "❌ Julia is not installed or not in PATH"
-    echo "Please install Julia from https://julialang.org/downloads/"
+    echo "Julia is not installed or not in PATH"
+    echo "Install from https://julialang.org/downloads/"
     exit 1
 fi
 
-echo "✅ Julia found: $(julia --version)"
+echo "Julia found: $(julia --version)"
 
-# Install Julia packages
-echo "📦 Installing Julia packages..."
+echo "Installing Julia packages..."
 julia --project="." -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"
-
 if [ $? -eq 0 ]; then
-    echo "✅ Julia packages installed successfully"
+    echo "Julia packages installed"
 else
-    echo "❌ Failed to install Julia packages"
+    echo "Failed to install Julia packages"
     exit 1
 fi
 
-# Setup Ollama model if available
+if command -v node &> /dev/null; then
+    echo "Installing TUI dependencies..."
+    (cd tui && npm install)
+else
+    echo "Node.js not found. TUI will not work."
+    echo "Install from https://nodejs.org/"
+fi
+
 if command -v ollama &> /dev/null; then
-    echo "🤖 Ollama found. Setting up Kamila model..."
-    
-    # Check if Modelfile exists
-    if [ -f "../config/Modelfile" ]; then
-        # Try to create the model
-        ollama create kamila -f config/Modelfile 2>/dev/null
-        
+    echo "Setting up Ollama models..."
+    if [ -f "config/Modelfile.online" ]; then
+        ollama create kamila1 -f config/Modelfile.online 2>/dev/null
         if [ $? -eq 0 ]; then
-            echo "✅ Kamila model created successfully"
+            echo "kamila1 (online) created"
         else
-            echo "⚠️  Model creation failed. You may need to:"
-            echo "   1. Ensure Ollama is running: ollama serve"
-            echo "   2. Pull the base model: ollama pull qwen2.5-coder:0.5b"
-            echo "   3. Try: ollama create kamila -f config/Modelfile"
+            echo "kamila1 creation failed. Ensure Ollama is running: ollama serve"
         fi
-    else
-        echo "⚠️  Modelfile not found. AI features will be limited."
+    fi
+    if [ -f "config/Modelfile.offline" ]; then
+        ollama create kamila2 -f config/Modelfile.offline 2>/dev/null
+        if [ $? -eq 0 ]; then
+            echo "kamila2 (offline) created"
+        else
+            echo "kamila2 creation failed. Ensure Ollama is running: ollama serve"
+        fi
     fi
 else
-    echo "⚠️  Ollama not found. AI features will be limited."
-    echo "   Install Ollama from https://ollama.ai/ for AI functionality"
+    echo "Ollama not found. AI features limited."
 fi
 
-# Make launch script executable
 chmod +x bin/kamila
 
-# Create symbolic link for global access
-echo "🔗 Creating symbolic link for system-wide access..."
+echo "Creating system-wide symlink..."
 if [ -L "/usr/local/bin/kamila" ]; then
-    echo "⚠️  Symbolic link /usr/local/bin/kamila already exists. Skipping."
+    echo "Symlink already exists"
 else
-    echo "   This will allow you to run 'kamila' from anywhere."
-    echo "   You may be prompted for your password."
-    sudo ln -s "$(pwd)/bin/kamila" /usr/local/bin/kamila
-    if [ $? -eq 0 ]; then
-        echo "✅ Symbolic link created successfully"
-    else
-        echo "❌ Failed to create symbolic link. You can try running this command manually:"
-        echo "   sudo ln -s \"$(pwd)/bin/kamila\" /usr/local/bin/kamila"
-    fi
+    sudo ln -s "$(pwd)/bin/kamila" /usr/local/bin/kamila 2>/dev/null && echo "Symlink created" || echo "Could not create symlink (run manually: sudo ln -s \"$(pwd)/bin/kamila\" /usr/local/bin/kamila)"
 fi
 
-# Test basic functionality
-echo "🧪 Testing basic functionality..."
-julia --project="." -e "
-try
-    println(\"Testing module loading...\")
-    println(\"✅ Basic functionality test passed\")
-catch e
-    println(\"❌ Test failed: \", e)
-    exit(1)
-end
-"
-
 echo ""
-echo "🎉 Setup completed!"
-echo ""
-echo "🚀 To launch Kamila, just type:"
-echo "   kamila"
-echo ""
-echo "📚 Available commands:"
-echo "   kamila --help"
-echo "   kamila --test"
-echo "   kamila --demo"
-echo "   kamila --check"
-echo ""
-echo "📖 For more information, see docs/README.md"
-echo ""
-echo "🔐 Default password: kamila123"
-echo "   (Change this in the Settings menu after first launch)"
+echo "Setup complete!"
+echo "Launch: kamila"

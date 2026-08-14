@@ -34,6 +34,7 @@ desktop.ini
 # Logs - auto-generated
 *.log
 logs/
+.local/state/kamila/
 *.tmp
 
 # Local environment - auto-generated
@@ -64,3 +65,4 @@ coverage/
 lcov.info
 *.test
 
+node_modules/

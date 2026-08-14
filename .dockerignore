@@ -1,0 +1,16 @@
+.git
+node_modules
+**/node_modules
+docs/build
+docs/site
+*.log
+logs
+*.jl.cov
+*.jl.mem
+.kamila_*.json
+.trials
+trials
+.backup
+coverage
+*.tmp
+.gitignore

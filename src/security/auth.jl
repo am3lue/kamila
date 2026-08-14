@@ -11,10 +11,15 @@ using JSON
 using Dates
 using ..Kamila
 
-export authenticate_user, setup_password, change_password, verify_password, reset_auth
+export authenticate_user,
+    setup_password,
+    change_password,
+    verify_password,
+    reset_auth,
+    set_password,
+    change_password_to
 
 const CONFIG_FILE = Kamila.CONFIG_FILE
-const DEFAULT_PASSWORD = "kamila123"
 
 """
 Check if authentication is already configured
@@ -31,24 +36,24 @@ function setup_password()
     println("Please create a secure password for Kamila access.")
     println("Choose a strong password (minimum 8 characters recommended)")
     println()
-    
+
     while true
         print("Enter new password: ")
         password1 = readline(stdin)
-        
+
         if length(password1) < 4
             println("⚠️  Password too short. Please use at least 4 characters.")
             continue
         end
-        
+
         print("Confirm password: ")
         password2 = readline(stdin)
-        
+
         if password1 != password2
             println("❌ Passwords do not match. Please try again.")
             continue
         end
-        
+
         # Save the hashed password
         return save_password_hash(password1)
     end
@@ -62,16 +67,16 @@ function save_password_hash(password::String)
         # Generate salt and hash password
         salt = bytes2hex(rand(UInt8, 16))
         password_hash = bytes2hex(sha256(password * salt))
-        
+
         config = Dict(
             "password_hash" => password_hash,
             "salt" => salt,
             "created_date" => string(now()),
             "last_access" => "",
             "failed_attempts" => 0,
-            "locked" => false
+            "locked" => false,
         )
-        
+
         write(CONFIG_FILE, JSON.json(config, 2))
         println("✅ Password successfully configured!")
         return true
@@ -84,40 +89,40 @@ end
 """
 Authenticate user with password
 """
-function authenticate_user(;max_attempts::Int=3)
+function authenticate_user(; max_attempts::Int = 3)
     # If no config exists, use default password setup
     if !is_auth_configured()
         println("🔧 First time setup required.")
         return setup_password()
     end
-    
+
     # Load config
     config = load_auth_config()
-    
+
     # Check if account is locked
     if get(config, "locked", false)
         println("❌ Account is locked due to too many failed attempts.")
         println("Please contact administrator or wait before retrying.")
         return false
     end
-    
+
     attempts = 0
     while attempts < max_attempts
         print("Enter password: ")
         password = readline(stdin)
-        
+
         if verify_password(password)
             # Update last access
             config["last_access"] = string(now())
             config["failed_attempts"] = 0
             save_auth_config(config)
-            
+
             println("✅ Authentication successful!")
             return true
         else
             attempts += 1
             config["failed_attempts"] = attempts
-            
+
             if attempts >= max_attempts
                 # Lock account after max attempts
                 config["locked"] = true
@@ -130,7 +135,7 @@ function authenticate_user(;max_attempts::Int=3)
             end
         end
     end
-    
+
     return false
 end
 
@@ -142,14 +147,14 @@ function verify_password(password::String)
         config = load_auth_config()
         stored_hash = get(config, "password_hash", "")
         salt = get(config, "salt", "")
-        
+
         if isempty(stored_hash) || isempty(salt)
             return false
         end
-        
+
         # Hash the provided password with the same salt
         computed_hash = bytes2hex(sha256(password * salt))
-        
+
         return computed_hash == stored_hash
     catch
         return false
@@ -164,33 +169,33 @@ function change_password()
         println("❌ No password is currently set. Please run setup first.")
         return false
     end
-    
+
     print("Enter current password: ")
     current_password = readline(stdin)
-    
+
     if !verify_password(current_password)
         println("❌ Current password is incorrect.")
         return false
     end
-    
+
     println("Enter your new password:")
     while true
         print("New password: ")
         new_password1 = readline(stdin)
-        
+
         if length(new_password1) < 4
             println("⚠️  Password too short. Please use at least 4 characters.")
             continue
         end
-        
+
         print("Confirm new password: ")
         new_password2 = readline(stdin)
-        
+
         if new_password1 != new_password2
             println("❌ Passwords do not match. Please try again.")
             continue
         end
-        
+
         # Save the new password
         if save_password_hash(new_password1)
             println("✅ Password successfully changed!")
@@ -209,7 +214,7 @@ function load_auth_config()
         if !isfile(CONFIG_FILE)
             return Dict()
         end
-        
+
         content = read(CONFIG_FILE, String)
         return JSON.parse(content)
     catch
@@ -258,27 +263,25 @@ function get_auth_status()
             "configured" => false,
             "locked" => false,
             "failed_attempts" => 0,
-            "last_access" => "never"
+            "last_access" => "never",
         )
     end
-    
+
     config = load_auth_config()
     return Dict(
         "configured" => true,
         "locked" => get(config, "locked", false),
         "failed_attempts" => get(config, "failed_attempts", 0),
         "last_access" => get(config, "last_access", "never"),
-        "created_date" => get(config, "created_date", "unknown")
+        "created_date" => get(config, "created_date", "unknown"),
     )
 end
 
 """
-Simple password prompt (legacy compatibility)
+Simple password prompt (delegates to full authentication)
 """
 function simple_auth_prompt()
-    print("Enter password: ")
-    password = readline(stdin)
-    return password == DEFAULT_PASSWORD
+    return authenticate_user(max_attempts = 3)
 end
 
 """
@@ -289,11 +292,11 @@ function unlock_account()
         println("❌ No authentication configuration found.")
         return false
     end
-    
+
     config = load_auth_config()
     config["locked"] = false
     config["failed_attempts"] = 0
-    
+
     if save_auth_config(config)
         println("✅ Account unlocked successfully.")
         return true
@@ -301,6 +304,33 @@ function unlock_account()
         println("❌ Failed to unlock account.")
         return false
     end
+end
+
+"""
+Set password non-interactively (for bridge/API usage)
+"""
+function set_password(password::String)
+    salt = bytes2hex(rand(UInt8, 16))
+    hash = bytes2hex(sha256(password * salt))
+    config = Dict(
+        "password_hash" => hash,
+        "salt" => salt,
+        "created_date" => string(now()),
+        "last_access" => string(now()),
+        "locked" => false,
+        "failed_attempts" => 0,
+    )
+    return save_auth_config(config)
+end
+
+"""
+Change password non-interactively (for bridge/API usage)
+"""
+function change_password_to(current::String, new::String)
+    if !verify_password(current)
+        return false
+    end
+    return set_password(new)
 end
 
 end # module

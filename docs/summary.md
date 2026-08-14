@@ -21,11 +21,15 @@ Successfully implemented Kamila (K.A.M.I.L.A - Kind, Adaptive, Mind, Integrating
   - `file_access.jl` - Secure file operations
 
 ### Phase 3: Core Assistant Logic ✅
-- **Memory System**: JSON-based persistent storage (`memory/memory.jl`)
+- **Memory System**: SQLite database (schema v1) with JSON compat view (`memory/memory.jl`, `memory/db.jl`)
   - Task tracking
   - Achievement management
   - Goal setting and completion
   - Productivity metrics
+  - Chat history persistence
+  - WAL mode for crash safety
+  - Idempotent schema migrations
+  - Legacy JSON export/import
 - **Task Management**: Comprehensive task system (`tasks/task_manager.jl`)
   - Task creation with priorities
   - Daily schedule generation
@@ -50,11 +54,16 @@ Successfully implemented Kamila (K.A.M.I.L.A - Kind, Adaptive, Mind, Integrating
   - Daily report generation
 
 ### Phase 6: User Interface ✅
-- **TUI Components**: Terminal-based UI with colors (`ui/components.jl`)
+- **Node TUI**: Terminal-based UI with colors (`tui/`, Node + blessed)
   - Interactive menus
   - Real-time status displays
   - Styled panels and information cards
-- **Main Menu System**: Application flow control (`ui/main_menu.jl`)
+- **Chat Surface**: Incremental message store + renderer (`tui/src/messages.js`, `tui/src/renderer.js`, `tui/src/markdown.js`)
+  - Streaming re-renders only the active message
+  - Thinking blocks (click to expand/collapse), click-to-copy, markdown rendering
+  - Multiline input (Ctrl+O newline) + prompt recall ring (↑/↓)
+  - History hydration on launch via `chat.history`
+- **Main Menu System**: Application flow control (legacy Julia `ui/` replaced by the Node TUI)
   - Navigation between modules
   - Interactive feature handling
   - User input processing
@@ -81,11 +90,14 @@ Successfully implemented Kamila (K.A.M.I.L.A - Kind, Adaptive, Mind, Integrating
 - ✅ Productivity tracking and metrics
 
 ### Memory System
-- ✅ Persistent JSON-based storage
+- ✅ Persistent SQLite database (schema v1) with JSON compat view
 - ✅ Achievement tracking and history
 - ✅ Goal management with completion tracking
 - ✅ Activity statistics and productivity percentage
 - ✅ Data export and summary generation
+- ✅ Chat history persistence
+- ✅ WAL mode for crash safety
+- ✅ Idempotent schema migrations
 
 ### System Monitoring
 - ✅ Real-time system statistics (CPU, memory, disk)
@@ -121,21 +133,24 @@ Successfully implemented Kamila (K.A.M.I.L.A - Kind, Adaptive, Mind, Integrating
 - **Modular Design**: Separated concerns across specialized modules
 - **Security-First**: Built-in access controls and platform restrictions
 - **AI-Powered**: Integration with Ollama for intelligent assistance
-- **Persistent Storage**: JSON-based data persistence
+- **Persistent Storage**: SQLite database (schema v1) with JSON compat view
 - **Interactive TUI**: Terminal-based user interface
 
 ### Dependencies
 - **HTTP.jl**: API communication
 - **JSON.jl**: Data serialization
 - **SHA.jl**: Security hashing
-- **Term.jl**: Terminal interface
+- **SQLite.jl**: SQLite database driver (memory storage)
+- **Tables.jl**: Tabular data interface (query result materialization)
 - **Dates.jl**: Time handling
+- **Node.js + blessed**: Terminal UI (`tui/`)
 - **FileWatching.jl**: File system monitoring
 - **ArgParse.jl**: Command line parsing
 
 ### Configuration
 - **Allowed Directories**: Desktop, Pictures, Documents, Downloads, Trash, Codes
-- **Memory File**: `~/.kamila_memory.json`
+- **Memory DB**: `~/.local/state/kamila/kamila.db` (SQLite, schema v1)
+- **Memory JSON**: `~/.kamila_memory.json` (compat view)
 - **Config File**: `~/.kamila_config.json`
 - **AI Model**: Custom qwen2.5-coder:0.5b configuration
 
@@ -152,7 +167,8 @@ Kamila/
 │   │   ├── auth.jl          # Authentication
 │   │   └── file_access.jl   # File security
 │   ├── memory/
-│   │   └── memory.jl        # Memory system
+│   │   ├── memory.jl        # Memory API (compat + typed CRUD)
+│   │   └── db.jl            # SQLite backend (MemoryDB module)
 │   ├── tasks/
 │   │   └── task_manager.jl  # Task management
 │   ├── system/
@@ -225,7 +241,7 @@ chmod +x bin/kamila
 - ✅ **Ollama integration**: AI backend communication working
 - ✅ **TUI interface**: Colorful terminal interface functional
 - ✅ **Task management**: Complete task lifecycle management
-- ✅ **Memory persistence**: JSON-based storage system
+- ✅ **Memory persistence**: SQLite database (schema v1) with JSON compat view
 - ✅ **System monitoring**: Hardware and performance tracking
 - ✅ **Desktop organization**: File management capabilities
 - ✅ **AI assistance**: File explanation and suggestions
@@ -240,7 +256,7 @@ chmod +x bin/kamila
 - **User Experience**: Intuitive interface and clear feedback
 
 ### Performance
-- **Efficient Data Storage**: JSON-based persistence
+- **Efficient Data Storage**: SQLite database (schema v1) with WAL mode
 - **Responsive Interface**: Interactive TUI with real-time updates
 - **Resource Monitoring**: Lightweight system monitoring
 - **AI Integration**: Optimized Ollama communication

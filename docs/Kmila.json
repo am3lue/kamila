@@ -1,0 +1,174 @@
+{
+"agent": {
+"name": "Kamila",
+"version": "1.0",
+"mode": "autonomous",
+"description": "Local AI assistant with tool usage and multi-step reasoning",
+"max_iterations": 6,
+"timeout_seconds": 30,
+"verbose": true
+},
+
+"model": {
+"provider": "ollama",
+"name": "llama3",
+"endpoint": "http://localhost:11434/api/generate",
+"options": {
+"temperature": 0.7,
+"top_p": 0.9,
+"repeat_penalty": 1.1,
+"num_predict": 512
+}
+},
+
+"prompt": {
+"system": "You are Kamila, a local AI agent.\n\nYou can:\n- Think step-by-step\n- Use tools\n- Solve tasks autonomously\n\nRULES:\n1. If a tool is required, respond ONLY in this format:\nTOOL: tool_name(arg1=value1, arg2=value2)\n2. Wait for tool results before continuing\n3. You may use multiple steps\n4. When task is complete, respond with FINAL ANSWER\n\nDo not explain tool usage unless asked.",
+
+"format": {
+  "tool_call_prefix": "TOOL:",
+  "final_answer_prefix": "FINAL ANSWER:"
+}
+
+},
+
+"reasoning": {
+"strategy": "loop",
+"allow_multi_step": true,
+"max_tool_calls_per_iteration": 2,
+"stop_conditions": [
+"FINAL ANSWER detected",
+"max_iterations reached"
+]
+},
+
+"memory": {
+"enabled": true,
+"type": "local_file",
+"file": "memory.json",
+"max_entries": 100,
+"context_window": 10,
+"strategy": "recent_relevant",
+"fields": [
+"user_input",
+"agent_response",
+"tool_used",
+"timestamp"
+]
+},
+
+"tools": [
+{
+"name": "read_file",
+"enabled": true,
+"description": "Read contents of a file",
+"parameters": {
+"path": {
+"type": "string",
+"required": true
+}
+}
+},
+{
+"name": "write_file",
+"enabled": true,
+"description": "Write content to a file",
+"parameters": {
+"path": {
+"type": "string",
+"required": true
+},
+"content": {
+"type": "string",
+"required": true
+}
+}
+},
+{
+"name": "list_files",
+"enabled": true,
+"description": "List files in a directory",
+"parameters": {
+"path": {
+"type": "string",
+"required": true
+}
+}
+},
+{
+"name": "run_command",
+"enabled": false,
+"description": "Execute system command (restricted)",
+"parameters": {
+"command": {
+"type": "string",
+"required": true
+}
+}
+},
+{
+"name": "system_status",
+"enabled": true,
+"description": "Get CPU, RAM, disk usage",
+"parameters": {}
+},
+{
+"name": "create_task",
+"enabled": true,
+"description": "Create a new task",
+"parameters": {
+"title": {
+"type": "string",
+"required": true
+},
+"priority": {
+"type": "string",
+"required": false
+}
+}
+}
+],
+
+"tool_execution": {
+"mode": "synchronous",
+"retry_on_failure": true,
+"max_retries": 2,
+"timeout_seconds": 10
+},
+
+"security": {
+"enabled": true,
+"allowed_directories": [
+"//Desktop",
+"//Documents"
+],
+"blocked_commands": [
+"rm -rf /",
+"shutdown",
+"reboot",
+"mkfs"
+],
+"require_confirmation_for": [
+"write_file",
+"run_command"
+]
+},
+
+"logging": {
+"enabled": true,
+"level": "info",
+"file": "logs/agent.log",
+"log_tool_calls": true,
+"log_errors": true
+},
+
+"ui": {
+"mode": "cli",
+"show_thoughts": false,
+"show_tool_calls": true
+},
+
+"extensions": {
+"plugin_folder": "tools/",
+"auto_load": true
+}
+}

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  julia-test:
+    name: Julia unit/integration (no network)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v2
+      - name: Instantiate
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Run test suite
+        run: julia --project=. test/run.jl
+      - name: Run with coverage
+        run: julia --project=. --code-coverage=user test/run.jl
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: julia-coverage
+          path: src/**/*.cov
+        if: always()
+
+  julia-format:
+    name: Julia lint (JuliaFormatter + Aqua + JET)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - name: Run lint target
+        run: julia --project=. -e 'using Pkg; Pkg.test(; test_args=["lint"])'
+
+  node-lint:
+    name: Node TUI lint + syntax
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tui/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Syntax check
+        run: node --check src/index.js && node --check src/app.js && node --check src/bridge.js && node --check src/markdown.js
+      - name: Lint
+        run: npm run lint
+
+  bridge-smoke:
+    name: Bridge smoke test (mocked Ollama)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - name: Instantiate
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
+      - name: Run bridge smoke
+        run: bash scripts/ci-smoke.sh

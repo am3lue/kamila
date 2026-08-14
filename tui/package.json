@@ -1,0 +1,20 @@
+{
+  "name": "kamila-tui",
+  "version": "0.2.0",
+  "description": "Kamila TUI — Hybrid Dashboard + Chat",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "lint": "eslint src test",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:check": "node --check index.js && node --check src/app.js && node --check src/bridge.js && node --check src/confirm.js && node --check src/permission.js && node --check src/markdown.js && node --check src/messages.js && node --check src/renderer.js"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "blessed-contrib": "^4.11.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  }
+}

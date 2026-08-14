@@ -45,13 +45,16 @@ Kamila should help effectively with the PC in the easiest way possible:
     *   Must have a password/authentication mechanism to reject unauthorized users ("trespassers").
 
 ## 4. Memory & persistence
-Kamila requires a persistent memory system stored in the home directory (e.g., a `.json` file).
-*   **Summarization:** When not in use, Kamila should generate summaries of interactions.
+Kamila requires a persistent memory system stored in the home directory.
+*   **Storage**: SQLite database at `~/.local/state/kamila/kamila.db` (schema v1) with WAL mode for crash safety
+*   **Compat View**: JSON export at `~/.kamila_memory.json` for backup/portability
+*   **Summarization**: When not in use, Kamila should generate summaries of interactions.
 *   **Data Points to Track:**
     *   Tasks for "Blue" (User alias?).
     *   Today's Achievements.
     *   Future Goals.
     *   Productivity Metrics (% of useful vs. non-useful activities).
+    *   Chat History (persistent across restarts)
 
 ## 5. Technology Stack
 

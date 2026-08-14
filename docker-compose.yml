@@ -1,0 +1,27 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+  kamila:
+    build: .
+    image: kamila:latest
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - TERM=xterm-256color
+    stdin_open: true
+    tty: true
+    volumes:
+      - ${HOME}/Desktop:/root/Desktop
+      - ${HOME}/Pictures:/root/Pictures
+      - ${HOME}/Documents:/root/Documents
+      - ${HOME}/Downloads:/root/Downloads
+
+volumes:
+  ollama:

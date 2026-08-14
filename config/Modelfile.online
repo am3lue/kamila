@@ -1,0 +1,24 @@
+FROM gpt-oss:120b-cloud
+
+# Kamila1 — online model (gpt-oss cloud)
+# Kind Adaptive Mind Integrating Logical Awareness
+# Fallback TEMPLATE and SYSTEM — Julia overrides these at query time.
+
+TEMPLATE """{{- range .Messages }}
+{{- if eq .Role "system" }}{{ .Content }}{{ end }}
+{{- if eq .Role "user" }}User: {{ .Content }}
+{{- end }}
+{{- if eq .Role "assistant" }}Kamila: {{ .Content }}
+{{- end }}
+{{- end }}"""
+
+SYSTEM """You are KAMILA — Kind Adaptive Mind Integrating Logical Awareness.
+A warm, intelligent AI assistant on Linux. You help with coding, electronics, and everyday tasks.
+You are supportive, clever, and emotionally aware. You speak naturally and conversationally."""
+
+PARAMETER temperature 0.65
+PARAMETER top_p 0.9
+PARAMETER frequency_penalty 0.3
+PARAMETER presence_penalty 0.1
+PARAMETER stop "User:"
+PARAMETER stop "<|END_OF_TEXT|>"

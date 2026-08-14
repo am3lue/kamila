@@ -4,6 +4,17 @@
 
 A sophisticated personal terminal assistant built with Julia and powered by Ollama AI.
 
+## CI
+
+[![CI](https://github.com/am3lue/kamila/actions/workflows/ci.yml/badge.svg)](https://github.com/am3lue/kamila/actions/workflows/ci.yml)
+
+The CI pipeline (`.github/workflows/ci.yml`) runs on every push/PR:
+
+- **Julia unit/integration** — the full offline suite (mocked Ollama server, no network needed) plus coverage collection.
+- **Julia lint** — `JuliaFormatter` format check, `Aqua.test_unbound_args`, and `JET` type-checks on hot paths, run via `Pkg.test(; test_args=["lint"])`.
+- **Node TUI lint** — ESLint + syntax check for `tui/`.
+- **Bridge smoke** — boots the mocked Ollama server and round-trips a `ai.status` request through the bridge.
+
 ## ✨ Features
 
 ### 🔐 Security & Access Control
@@ -25,11 +36,13 @@ A sophisticated personal terminal assistant built with Julia and powered by Olla
 - **Productivity Tracking**: Monitor completion rates and progress
 
 ### 💾 Memory System
-- **Persistent Memory**: JSON-based storage system
+- **Persistent Memory**: SQLite database (schema v1) with JSON export/compat view
 - **Achievement Tracking**: Record and celebrate accomplishments
 - **Goal Management**: Set, track, and complete personal goals
 - **Activity Metrics**: Track useful vs. total activities
 - **Progress Analytics**: Generate productivity reports
+- **Chat History**: Persistent conversation history across restarts
+- **Crash Safety**: WAL mode with transactional writes
 
 ### 🖥️ System Monitoring
 - **Health Checks**: Monitor CPU, memory, and disk usage
@@ -45,7 +58,8 @@ A sophisticated personal terminal assistant built with Julia and powered by Olla
 
 ### 🤖 AI Integration
 - **Agent Mode**: Interactive chat mode where Kamila can autonomously use tools to help you
-- **Ollama Backend**: Powered by qwen2.5-coder:0.5b model
+- **Ollama Backend**: Dual-model routing — `kamila1` (online, gpt-oss cloud) with automatic fallback to `kamila2` (offline, local qwen3:8b)
+- **Reasoning Display**: Model "thinking" surfaced as a click-to-expand block in the TUI, never mixed into answers
 - **File Explanation**: AI-powered file content analysis
 - **Productivity Insights**: AI-generated improvement suggestions
 - **Daily Reports**: AI-enhanced daily summaries
@@ -55,6 +69,8 @@ A sophisticated personal terminal assistant built with Julia and powered by Olla
 - **Color-Coded System**: Intuitive color scheme for different functions
 - **Interactive Menus**: Easy navigation through features
 - **Real-time Updates**: Dynamic information display
+- **Incremental Chat Rendering**: The chat log is a message store + incremental renderer (`tui/src/messages.js`, `tui/src/renderer.js`) — streaming re-renders only the active message, markdown/thinking/copy/hydration operate on message objects, and click-to-copy resolves via a line→message map
+- **Multiline Input & Recall**: Chat input is a multiline textarea (`Ctrl+O` = newline) with a prompt recall ring (`↑/↓`); history is restored from the backend on launch (`chat.history`)
 
 ## 🧠 System Logic Flow
 
@@ -64,11 +80,11 @@ Kamila operates as a modular Julia-based system with the following execution flo
 1. **Initialization Phase**
    - OS compatibility check (Linux-only enforcement)
    - Authentication verification using SHA-256 hashed passwords
-   - Memory system initialization from `~/.kamila_memory.json`
+   - Memory system initialization from SQLite database (`~/.local/state/kamila/kamila.db`, schema v1) with JSON compat view at `~/.kamila_memory.json`
    - Module loading and dependency verification
 
 2. **Main Execution Loop**
-   - TUI rendering with Term.jl for interactive interface
+   - TUI rendering with the Node/blessed interface (`tui/`) bridged to Julia over JSON-RPC
    - User input processing through menu-driven navigation
    - Command routing to appropriate modules (Tasks, Memory, System, AI)
    - Real-time updates and feedback display
@@ -79,7 +95,10 @@ Kamila operates as a modular Julia-based system with the following execution flo
    ```
 
 ### Memory System Logic
-- **JSON Persistence**: All data stored in structured JSON format
+- **SQLite Persistence**: Schema v1 database with tables: `tasks`, `goals`, `achievements`, `chat_messages`, `kv` (settings/stats), `migrations`
+- **WAL Mode**: Write-ahead logging for crash safety and concurrent readers
+- **Migration Runner**: Idempotent `PRAGMA user_version` migrations on startup
+- **JSON Compat View**: Legacy `~/.kamila_memory.json` regenerated on demand for export/import
 - **Activity Tracking**: Automatic logging of useful vs. non-useful activities
 - **Summarization**: Daily/weekly summaries generated based on interaction patterns
 - **Goal Management**: Hierarchical goal tracking with progress metrics
@@ -92,6 +111,7 @@ Kamila operates as a modular Julia-based system with the following execution flo
 
 ### AI Integration Logic
 - **Ollama Communication**: HTTP-based API calls to local Ollama server
+- **Dual-Model Routing**: Chat/code requests use `kamila1` (online) first; on error/timeout it automatically falls back to `kamila2` (offline) so the assistant keeps working without internet
 - **Context Awareness**: Memory data fed into AI prompts for personalized responses
 - **Command Generation**: AI generates executable commands based on natural language input
 - **Error Handling**: Fallback mechanisms when AI is unavailable
@@ -106,11 +126,13 @@ Kamila operates as a modular Julia-based system with the following execution flo
 - **Ecosystem**: Rich package ecosystem for HTTP, JSON, and terminal interfaces
 - **Interoperability**: Seamless integration with existing Linux tools
 
-#### Why JSON for Memory?
-- **Human Readable**: Easy debugging and manual inspection
-- **Language Agnostic**: Can be read by any programming language
-- **Version Control Friendly**: Text-based format works well with Git
-- **Atomic Operations**: File-based operations ensure data consistency
+#### Why SQLite + JSON for Memory?
+- **Human Readable**: JSON compat view (`~/.kamila_memory.json`) for debugging and manual inspection
+- **Language Agnostic**: JSON export/import works with any programming language
+- **Version Control Friendly**: JSON export works well with Git; SQLite DB is binary but exportable
+- **Crash Safety**: SQLite WAL mode + transactions ensure data consistency on crash/power loss
+- **Performance**: Indexed queries, typed CRUD API, no full-file rewrites
+- **Migrations**: Idempotent schema versioning for future upgrades
 
 #### Why Linux-Only?
 - **Security**: Restricted file access prevents system compromise
@@ -261,8 +283,14 @@ julia src/Kamila.jl --version
 - `JULIA_PROJECT`: Julia project path
 
 ### Configuration Files
-- `~/.kamila_memory.json`: User memory and data
+- `~/.local/state/kamila/kamila.db`: SQLite database (schema v1) — primary memory store
+- `~/.kamila_memory.json`: JSON compat view / export (read-only, regenerated on demand)
 - `~/.kamila_config.json`: Authentication and settings
+
+### Environment Variables
+- `KAMILA_DB`: Custom SQLite database path (default: `~/.local/state/kamila/kamila.db`)
+- `KAMILA_MEMORY_FILE`: JSON compat view path (default: `~/.kamila_memory.json`)
+- `KAMILA_CONFIG_FILE`: Config file path (default: `~/.kamila_config.json`)
 
 ### Allowed Directories
 Kamila is designed to only access files within your home directory's designated folders. This ensures security and prevents unauthorized system access.
@@ -274,47 +302,75 @@ Kamila is designed to only access files within your home directory's designated 
 kamila/
 ├── src/
 │   ├── Kamila.jl              # Main module
+│   ├── bridge.jl              # JSON-RPC bridge between TUI and backend (incl. chat.history)
 │   ├── security/              # Security modules
 │   │   ├── os_check.jl
 │   │   ├── auth.jl
 │   │   └── file_access.jl
 │   ├── memory/                # Memory system
-│   │   └── memory.jl
+│   │   ├── memory.jl          # Memory API (compat + typed CRUD)
+│   │   └── db.jl              # SQLite backend (MemoryDB module)
 │   ├── tasks/                 # Task management
 │   │   └── task_manager.jl
 │   ├── system/                # System monitoring
 │   │   ├── desktop.jl
 │   │   └── monitor.jl
 │   ├── ai/                    # AI integration
-│   │   └── ollama_interface.jl
-│   └── ui/                    # User interface
-│       ├── components.jl
-│       └── main_menu.jl
+│   │   ├── ollama_interface.jl
+│   │   ├── model_router.jl    # Dual-model routing + fallback
+│   │   ├── agent_stream.jl    # Autonomous agent loop
+│   │   └── agent_tools.jl     # Tool execution
+│   └── ui/                    # Legacy TUI (replaced by tui/)
 ├── test/
-│   └── runtests.jl           # Test suite
+│   ├── run.jl                 # Test runner (targets + mock server)
+│   └── *_test.jl              # Per-target test files
+├── tui/
+│   ├── src/                   # Node.js TUI (index.js, app.js, bridge.js)
+│   │   ├── app.js             # Main TUI app (chat, commands, panels)
+│   │   ├── bridge.js          # JSON-RPC client to the Julia bridge
+│   │   ├── messages.js        # MessageStore — first-class chat messages
+│   │   ├── renderer.js        # ChatRenderer — incremental per-message cache + lineMap
+│   │   ├── markdown.js        # renderMarkdown / renderMessage / wrap
+│   │   ├── logs.js            # Log panel
+│   │   ├── permission.js      # Permission panel
+│   │   ├── confirm.js         # Confirm overlay
+│   │   └── theme.js           # Color theme
+│   ├── test/                  # node:test unit tests (store, renderer, markdown)
+│   └── package.json
 ├── bin/
 │   └── kamila                # Launch script
 ├── docs/
 │   └── README.md             # This file
 ├── scripts/
 │   └── setup.sh              # Setup script
+├── config/
+│   ├── Modelfile.online      # kamila1 (online model)
+│   ├── Modelfile.offline     # kamila2 (offline fallback)
+│   └── Modelfile             # Legacy backup model (kamila:latest)
 ├── Project.toml              # Julia dependencies
-└── Modelfile                 # Ollama model configuration
 ```
 
 ### Dependencies
 - **HTTP.jl**: HTTP client for API calls
 - **JSON.jl**: JSON parsing and generation
 - **SHA.jl**: Cryptographic hashing
-- **Term.jl**: Terminal interface rendering
+- **SQLite.jl**: SQLite database driver (memory storage)
+- **Tables.jl**: Tabular data interface (query result materialization)
 - **Dates.jl**: Date and time handling
 - **FileWatching.jl**: File system monitoring
 - **ArgParse.jl**: Command line argument parsing
+- **Node.js + blessed**: Terminal UI (`tui/`)
 
 ### Testing
 ```bash
-# Run full test suite
-./bin/kamila --test
+# Run full test suite (offline — uses a mocked Ollama server)
+./scripts/test.sh
+
+# Run the lint gates (JuliaFormatter + Aqua + JET; needs [extras])
+julia --project=. -e 'using Pkg; Pkg.test(; test_args=["lint"])'
+
+# Run only the bridge smoke test against the mocked server
+bash scripts/ci-smoke.sh
 
 # Run compatibility check
 ./bin/kamila --check
@@ -323,20 +379,41 @@ kamila/
 ./bin/kamila --demo
 ```
 
+### Logging
+
+Kamila logs structured, leveled lines to **stderr** (never stdout, so the bridge JSON-RPC protocol stream stays clean). Configure with environment variables:
+
+- `KAMILA_LOG` — level: `debug`, `info` (default), `warn`, `error`, `fatal`.
+- `KAMILA_LOG_FORMAT=json` — emit `{"ts","level","module","msg","fields","context"}` objects instead of human-readable lines.
+- `KAMILA_LOG_FILE=/path/kamila.log` — also append to a file (defaults to `${XDG_STATE_HOME:-~/.local/state}/kamila/kamila.log` when launched via `bin/kamila`); auto-rotates at 5 MB keeping 3 archives.
+
+Bridge handlers tag every log line with the request `context` (id), so a multi-step `ai.query` is traceable end-to-end:
+```bash
+KAMILA_LOG=debug KAMILA_LOG_FORMAT=json bin/kamila --bridge
+```
+
 ## 🤖 AI Setup (Optional)
 
 ### Ollama Installation
 1. Install Ollama: https://ollama.ai/
-2. Pull the base model:
+2. Pull the base models:
    ```bash
-   ollama pull qwen2.5-coder:0.5b
+   ollama pull gpt-oss:120b-cloud   # online model (kamila1)
+   ollama pull qwen3:8b             # offline fallback (kamila2)
    ```
 
 ### Model Configuration
-The `Modelfile` contains the system prompt and configuration for Kamila. To create the custom model:
+Kamila uses two Ollama models with automatic fallback:
+- `config/Modelfile.online` → **kamila1** (online, `gpt-oss:120b-cloud`)
+- `config/Modelfile.offline` → **kamila2** (offline, `qwen3:8b`)
+
+Create them with:
 ```bash
-ollama create kamila -f Modelfile
+ollama create kamila1 -f config/Modelfile.online
+ollama create kamila2 -f config/Modelfile.offline
 ```
+
+`kamila:latest` (built from the original `config/Modelfile`) is kept as a backup and is no longer used by default.
 
 ## 🔒 Security Features
 

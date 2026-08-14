@@ -1,22 +1,8 @@
 """
-Main Test Suite for Kamila Assistant
-Runs all unit and integration tests
+test/runtests.jl — legacy entry point; delegates to the new runner `test/run.jl`.
+
+`include("test/runtests.jl")` runs the full suite exactly like
+`julia --project=. test/run.jl`.
 """
 
-using Test
-
-println("🧪 Starting Kamila Test Suite")
-println("=" ^ 50)
-
-@testset "Kamila Full Suite" begin
-    # 1. Parts of Tools (Unit Tests)
-    println("\nRunning Agent Tools unit tests...")
-    include("tools_test.jl")
-    
-    # 2. Agent Logic (Parsing Tests)
-    println("\nRunning Agent Logic unit tests...")
-    include("agent_logic_test.jl")
-end
-
-println("\n" * "=" ^ 50)
-println("🎉 All tests completed!")
+include("run.jl")
