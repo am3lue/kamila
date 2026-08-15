@@ -138,6 +138,14 @@ const DEFAULT_MODELS = [
         max_tokens = 100,
         temperature = 0.5,
     ),
+    ModelConfig(
+        name = "llava",
+        label = "Vision (Local)",
+        task_type = :vision,
+        priority = 1,
+        max_tokens = 800,
+        temperature = 0.1,
+    ),
 ]
 
 function get_router_config()
@@ -262,7 +270,6 @@ function error_category_of(s::String)
         cat in Errors.CATEGORIES && return cat
         return :internal
     end
-
     for prefix in ERROR_PREFIXES
         if startswith(lower, prefix)
             return prefix == "error:" ? :internal : :network
@@ -570,6 +577,7 @@ function query_router_chat_stream(
     task_type::Symbol = :chat,
     prefer_model::String = "",
     model_ref::Union{Nothing,Base.RefValue{String}} = nothing,
+    tools::Union{Nothing,Vector} = nothing,
 )
     channel = Channel{OllamaInterface.StreamItem}(32)
     @async try
@@ -593,8 +601,9 @@ function query_router_chat_stream(
                 model = cfg.name,
                 temperature = temp,
                 max_tokens = tokens,
+                tools = tools,
             )
-                if is_error_response(item.text)
+                if is_error_response(item.text) && isempty(item.tool_calls)
                     push!(errors, "active($(cfg.name)): $(item.text)")
                     ok = false
                     break
@@ -619,8 +628,9 @@ function query_router_chat_stream(
                 model = cfg.name,
                 temperature = temp,
                 max_tokens = tokens,
+                tools = tools,
             )
-                if is_error_response(item.text)
+                if is_error_response(item.text) && isempty(item.tool_calls)
                     push!(errors, "preferred($(cfg.name)): $(item.text)")
                     ok = false
                     break
@@ -645,8 +655,9 @@ function query_router_chat_stream(
                 model = cfg.name,
                 temperature = temp,
                 max_tokens = tokens,
+                tools = tools,
             )
-                if is_error_response(item.text)
+                if is_error_response(item.text) && isempty(item.tool_calls)
                     push!(errors, "$(cfg.name): $(item.text)")
                     break
                 end

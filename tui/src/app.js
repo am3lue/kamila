@@ -517,8 +517,36 @@ class KamilaApp {
 
     switch (cmd) {
       case '/help':
-        this.appendChat('{yellow-fg}Commands:{/} /help /clear /reset /copy /mode /status /tasks /models /agent /model /task (add|done|rm|list)');
+        this.appendChat('{yellow-fg}Commands:{/} /help /clear /reset /copy /mode /status /tasks /models /agent /model /task (add|done|rm|list) /record /context /watch /shot');
         break;
+      case '/record': {
+        // Voice input: record N seconds, transcribe, and prefill the input as
+        // an editable draft for correction before sending (08.2).
+        const seconds = parseInt(parts[1], 10) || 3;
+        const status = this.messageStore.add('system', `⟳ Recording ${seconds}s…`, { kind: 'status' });
+        this.renderChat();
+        this.screen.render();
+        try {
+          const rec = await this.bridge.audioRecord(seconds);
+          const text = (rec && rec.text) || '';
+          this.messageStore.remove(status.id);
+          if (!text) {
+            this.appendChat('{red-fg}No speech recognized — draft-correct manually or try again.{/}');
+            break;
+          }
+          this.chatInput.setValue(text);
+          this.chatInput.focus();
+          this.appendChat(`{cyan-fg}🎤 Draft (edit then Enter to send):{/}`);
+          this.appendChat(`{yellow-fg}  ${text}{/}`);
+          this.logBuffer.push('VOICE', `Draft: ${text}`);
+        } catch (e) {
+          this.messageStore.remove(status.id);
+          this.appendChat(`{red-fg}Recording failed: ${e.message}{/}`);
+          this.logBuffer.push('ERR', `Record failed: ${e.message}`);
+        }
+        this.screen.render();
+        break;
+      }
       case '/clear':
         this.messageStore.clear();
         this.chatRenderer.clear();
@@ -597,6 +625,66 @@ class KamilaApp {
         }
         this.statusMsg = null;
         this.renderChat();
+        this.screen.render();
+        break;
+      }
+      case '/context': {
+        // Desktop awareness: show what Kamila sees (08.3).
+        const status = this.messageStore.add('system', '⟳ Reading desktop context…', { kind: 'status' });
+        this.renderChat();
+        this.screen.render();
+        try {
+          const ctx = await this.bridge.desktopStatus();
+          this.messageStore.remove(status.id);
+          this.appendChat('{cyan-fg}Desktop context:{/}');
+          this.appendChat(`{yellow-fg}  Session:{/} ${ctx.session || 'unknown'}`);
+          this.appendChat(`{yellow-fg}  Active window:{/} ${ctx.active_window || '— unavailable'}`);
+          this.appendChat(`{yellow-fg}  CWD:{/} ${ctx.cwd || '— unavailable'}`);
+          this.appendChat(`{yellow-fg}  Watch:{/} ${ctx.watch_enabled ? '{green-fg}on{/}' : 'off'}`);
+          const clip = ctx.clipboard || '— unavailable';
+          this.appendChat(`{yellow-fg}  Clipboard:{/} ${clip.length > 120 ? clip.slice(0, 120) + '…' : clip}`);
+          this.logBuffer.push('SYS', `Context: window=${ctx.active_window || 'none'}`);
+        } catch (e) {
+          this.messageStore.remove(status.id);
+          this.appendChat(`{red-fg}Context error: ${e.message}{/}`);
+        }
+        this.screen.render();
+        break;
+      }
+      case '/watch': {
+        // Toggle the proactive desktop watcher (off by default; explicit opt-in).
+        const arg = parts[1];
+        let enable;
+        if (arg === 'on' || arg === '1' || arg === 'true') enable = true;
+        else if (arg === 'off' || arg === '0' || arg === 'false') enable = false;
+        else enable = null;
+        try {
+          const current = await this.bridge.desktopStatus();
+          if (enable === null) {
+            enable = !(current.watch_enabled);
+          }
+          const r = await this.bridge.desktopWatch(enable);
+          this.appendChat(r.watch_enabled ? '{green-fg}✓ Desktop watcher ON{/}' : '{yellow-fg}Desktop watcher OFF{/}');
+        } catch (e) {
+          this.appendChat(`{red-fg}Watch toggle failed: ${e.message}{/}`);
+        }
+        this.screen.render();
+        break;
+      }
+      case '/shot': {
+        // Screenshot → vision description (image never shown, only text).
+        const status = this.messageStore.add('system', '⟳ Capturing & describing screen…', { kind: 'status' });
+        this.renderChat();
+        this.screen.render();
+        try {
+          const r = await this.bridge.desktopScreenshot();
+          this.messageStore.remove(status.id);
+          this.appendChat('{cyan-fg}Screen description:{/}');
+          this.appendChat(r.description || '{red-fg}No description returned.{/}');
+        } catch (e) {
+          this.messageStore.remove(status.id);
+          this.appendChat(`{red-fg}Screenshot failed: ${e.message}{/}`);
+        }
         this.screen.render();
         break;
       }

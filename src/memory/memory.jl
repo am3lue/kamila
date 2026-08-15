@@ -13,6 +13,9 @@ using ..Kamila
 using ..KamilaLog
 using ..MemoryDB
 using ..Vectors
+using ..Events
+import ..Plan as PlanModule
+import ..Decompose as DecomposeModule
 
 export initialize_memory,
     get_memory_stats,
@@ -20,6 +23,9 @@ export initialize_memory,
     add_goal,
     get_active_goals,
     complete_goal,
+    decompose_goal,
+    link_goal_plan,
+    goal_progress,
     generate_summary,
     load_memory,
     save_memory,
@@ -49,6 +55,10 @@ function _task_row_to_dict(row)
     )
 end
 
+# SQLite NULL columns materialize as `missing`, not `nothing`. Coerce so callers
+# can rely on `=== nothing`.
+_undef(v) = v isa Missing ? nothing : v
+
 function _goal_row_to_dict(row)
     return Dict(
         "id" => row.id,
@@ -56,6 +66,9 @@ function _goal_row_to_dict(row)
         "category" => something(row.category, "general"),
         "priority" => something(row.priority, 1),
         "completed" => row.completed == 1,
+        "status" => something(_undef(get(row, :status, nothing)), row.completed == 1 ? "completed" : "active"),
+        "plan_id" => _undef(get(row, :plan_id, nothing)),
+        "progress" => _undef(get(row, :progress, nothing)),
         "created_date" => something(row.created_date, ""),
         "completed_date" => something(row.completed_date, ""),
     )
@@ -185,23 +198,78 @@ function add_goal(goal_text::String, category::String = "general", priority::Int
         id = _next_id(db, "goals")
         SQLite.execute(
             db,
-            "INSERT INTO goals (id, goal, category, priority, completed, progress, created_date, completed_date) VALUES (?,?,?,?,0,0,?,?)",
+            "INSERT INTO goals (id, goal, category, priority, completed, progress, status, created_date, completed_date) VALUES (?,?,?,?,0,0,'active',?,?)",
             (id, goal_text, category, priority, string(now()), ""),
         )
     end
     return true
 end
 
+"""
+Derive a goal's progress from its linked plan (verified steps / total steps).
+Returns `nothing` when the goal has no plan. Refreshable `00`-style computed
+cache: the stored `progress` column is updated in place.
+"""
+function goal_progress(goal_id::Int)
+    rows = MemoryDB.query_all("SELECT * FROM goals WHERE id = ?", (goal_id,))
+    isempty(rows) && return nothing
+    plan_id = _undef(get(first(rows), :plan_id, nothing))
+    plan_id === nothing && return nothing
+    plan = PlanModule.load(plan_id)
+    plan === nothing && return nothing
+    total = length(plan.steps)
+    total == 0 && return 0
+    verified = count(s -> s.status == :verified, plan.steps)
+    progress = round(Int, verified / total * 100)
+    MemoryDB.execute!(
+        "UPDATE goals SET progress = ? WHERE id = ?",
+        (progress, goal_id),
+    )
+    return progress
+end
+
+"""
+Link a goal to an existing plan and refresh its derived progress.
+"""
+function link_goal_plan(goal_id::Int, plan_id::String)
+    plan = PlanModule.load(plan_id)
+    plan === nothing && return false
+    MemoryDB.execute!(
+        "UPDATE goals SET plan_id = ? WHERE id = ?",
+        (plan_id, goal_id),
+    )
+    goal_progress(goal_id)
+    return true
+end
+
+"""
+Decompose a goal into a plan and link it. On success returns the new `plan_id`.
+"""
+function decompose_goal(goal_id::Int; max_steps::Int = 6)
+    rows = MemoryDB.query_all("SELECT * FROM goals WHERE id = ?", (goal_id,))
+    isempty(rows) && return nothing
+    goal_text = first(rows).goal
+    plan = DecomposeModule.decompose_to_plan(goal_text; max_steps = max_steps)
+    link_goal_plan(goal_id, plan.id)
+    return plan.id
+end
+
 function complete_goal(goal_id::Int)
     return MemoryDB.transaction() do db
-        rows = collect(
-            SQLite.DBInterface.execute(db, "SELECT * FROM goals WHERE id = ?", (goal_id,)),
-        )
+        rows = MemoryDB.query_all("SELECT * FROM goals WHERE id = ?", (goal_id,))
         isempty(rows) && return false
-        goal = rows[1]
+        goal = first(rows)
+        plan_id = _undef(get(goal, :plan_id, nothing))
+        if plan_id !== nothing
+            # Completion is gated on the linked plan being completed.
+            plan = PlanModule.load(plan_id)
+            if plan !== nothing && plan.status != :completed
+                return false
+            end
+        end
         SQLite.execute(
             db,
-            "UPDATE goals SET completed = 1, completed_date = ? WHERE id = ?",
+            "UPDATE goals SET completed = 1, status = 'completed', completed_date = ? WHERE id = ?",
             (string(now()), goal_id),
         )
         _insert_achievement(
@@ -215,6 +283,17 @@ function complete_goal(goal_id::Int)
 end
 
 function get_active_goals()
+    goals = get_goals()
+    for g in goals
+        if !get(g, "completed", false)
+            # Refresh derived progress from the linked plan (best effort).
+            try
+                goal_progress(g["id"])
+            catch
+            end
+        end
+    end
+    # Re-read so the refreshed progress is reflected in the returned dicts.
     return filter(g -> !get(g, "completed", false), get_goals())
 end
 

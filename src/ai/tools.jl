@@ -1,6 +1,7 @@
 module AgentTools
 
 using Dates
+using JSON
 using ..FileAccess
 using ..KamilaMemory
 using ..TaskManager
@@ -9,15 +10,24 @@ using ..OllamaInterface
 using ..KamilaLog
 using ..Errors
 using ..ModelRouter
+using ..Decompose
 using ..Confirm
 using ..Permission
+using ..Capability
 using ..Search
 using ..MemoryDB
 using ..Episodic
 using ..Context
+using ..Scheduler
+using ..Experience
+using ..Vision
+using ..STT
+using ..DesktopContext
+using ..Screenshot
 
 export Tool,
-    get_all_tools, get_filtered_tools, execute_tool, prompt_confirm, execute_tool_structured
+    get_all_tools, get_filtered_tools, execute_tool, prompt_confirm, execute_tool_structured,
+    register_tool_source!
 
 struct Tool
     name::String
@@ -49,19 +59,33 @@ end
 
 # ─── Permission gate ───────────────────────────────────────
 # Policy-driven authorization (see 02.2-tool-permission-redesign). `force` is
-# honored only with a valid capability token issued by `Permission` when the
-# policy yields :allow — a model-set `force=true` is otherwise treated per policy.
+# honored only with a valid capability token — a model-set `force=true` without
+# a token is otherwise treated per policy (05.3 removes any bypass path).
 
 """
 Check whether a tool call may proceed under the permission policy. Returns
 `nothing` when authorized; throws `KamilaError(:permission)` when denied.
-  - policy :allow -> authorized (also issues no token; already allowed)
-  - policy :deny  -> throws
+  - policy :allow -> authorized (no token needed)
+  - policy :deny  -> throws (a capability token can never override a deny rule)
   - policy :ask   -> requires a valid capability token OR an interactive/bridge
                      confirmation; a successful confirmation is remembered for
                      the session so identical calls aren't re-prompted.
+`capabilities` is an optional scope (`Set` of capability or tool names); a call
+whose tool is outside the scope is denied (used by batches/sub-agents, 05.3).
 """
-function _authorize!(tool::String, args::Dict; description::String = "")
+function _authorize!(tool::String, args::Dict; description::String = "", capabilities::Union{Nothing,AbstractSet} = nothing)
+    # 05.3: scope narrowing. A child (batch/sub-agent) can never invoke a tool
+    # outside its parent's capability set.
+    if capabilities !== nothing && !Capability.in_scope(tool, capabilities)
+        throw(
+            Errors.KamilaError(
+                :permission,
+                "Action blocked by capability scope: $(_describe_tool_call(tool, args))",
+                details = Dict("tool" => tool, "args" => args, "scope" => collect(capabilities)),
+            ),
+        )
+    end
+
     decision, rule = Permission._evaluate_with_rule(tool, args)
 
     if decision == :allow
@@ -76,10 +100,16 @@ function _authorize!(tool::String, args::Dict; description::String = "")
         )
     end
 
-    # :ask — a capability token (force) or a user confirmation is required.
+    # :ask — a capability token (minted after approval) or a user confirmation
+    # is required. `force=true` without a token is still treated per policy.
     token = get(args, "capability", "")
-    if !isempty(token) && Permission.verify_capability(tool, args, token)
-        return nothing
+    if !isempty(token)
+        verified =
+            Capability.verify_capability(tool, args, token) ||
+            Permission.verify_capability(tool, args, token)
+        if verified
+            return nothing
+        end
     end
 
     approved = Confirm.confirm(
@@ -135,6 +165,21 @@ function run_shell_command(args::Dict)
         end
         return "Error executing command: $e"
     end
+end
+
+"""
+Execute a skill shell template. Called by the Skills registry (05.2); the
+template allowlist is enforced by the registry before this runs. No user
+confirmation here: authorization happened when the skill tool was invoked.
+"""
+function _run_shell_for_skill(command::String)
+    timeout_cmd = `timeout 30 bash -c $command`
+    output = try
+        read(timeout_cmd, String)
+    catch e
+        return "Error executing skill command: $(Errors.error_string(e))"
+    end
+    return safe_truncate(output)
 end
 
 # ─── 2. read_file ─────────────────────────────────────────
@@ -489,7 +534,6 @@ function web_search(args::Dict)
     if isempty(query)
         return "Error: query is required"
     end
-
     max_results = clamp(get(args, "max_results", 5), 1, 20)
 
     results = Search.search(query; max_results = max_results)
@@ -513,6 +557,108 @@ function web_search(args::Dict)
     end
 
     return "🌐 Web search results for '$query':\n\n$(join(lines, "\n\n"))"
+end
+
+# ─── 8b. reuse_solution (07.1) ────────────────────────────
+
+"""
+Retrieve a previously verified solution (experience record) matching
+`description` so the model can adapt it instead of starting from scratch.
+Returns the top records; the model must still verify its reuse.
+"""
+function reuse_solution(args::Dict)
+    description = get(args, "description", "")
+    if isempty(description)
+        return "Error: description is required"
+    end
+
+    k = clamp(Int(get(args, "max_results", 1)), 1, 10)
+    results = Experience.similar_solution(description; k = k)
+    if isempty(results)
+        return "No verified past solution found for '$description'."
+    end
+
+    lines = String[]
+    for r in results
+        push!(
+            lines,
+            "• ($(round(get(r, "score", 0.0) * 100, digits = 0))% similar) " *
+            "$(get(r, "tool", "")): $(get(r, "prompt", ""))" *
+            (get(r, "result", nothing) === nothing ? "" : "\n  result: $(r["result"])"),
+        )
+    end
+    return "🧠 Past verified solutions for '$description':\n\n$(join(lines, "\n\n"))"
+end
+
+# ─── 8c. vision (08.1) ────────────────────────────────────
+
+"""
+Interpret an image via the vision-capable model. `task` is "describe" or "qa".
+Returns a description or an answer; a missing/unreachable vision model yields a
+categorized `:external` error, never a hallucinated guess.
+"""
+function vision_tool(args::Dict)
+    file_path = get(args, "file_path", "")
+    if isempty(file_path)
+        return "Error: file_path is required"
+    end
+    task = get(args, "task", "describe")
+    try
+        if task == "qa"
+            question = get(args, "question", "")
+            isempty(question) && return "Error: question is required for task=qa"
+            return Vision.qa_image(file_path, question)
+        else
+            return Vision.describe_image(file_path)
+        end
+    catch e
+        return _handle_tool_error(e, "reading image '$file_path'")
+    end
+end
+
+# ─── 8d. transcribe_audio (08.2) ─────────────────────────
+
+function transcribe_audio(args::Dict)
+    file_path = get(args, "file_path", "")
+    if isempty(file_path)
+        return "Error: file_path is required"
+    end
+    try
+        text = STT.transcribe_audio(file_path)
+        return "📝 Transcribed audio: $text"
+    catch e
+        return _handle_tool_error(e, "transcribing audio '$file_path'")
+    end
+end
+
+# ─── 8e. desktop_status (08.3) ──────────────────────────
+
+"""
+Return a JSON snapshot of the current desktop session: active window title,
+cwd, and redacted clipboard. Screenshot description is a separate opt-in tool.
+"""
+function desktop_status_tool(args::Dict)
+    try
+        info = DesktopContext.desktop_status()
+        return "🖥️ Desktop context: " * JSON.json(info)
+    catch e
+        return _handle_tool_error(e, "getting desktop context")
+    end
+end
+
+# ─── 8f. screenshot_describe (08.3) ─────────────────────
+
+"""
+Capture the screen, describe it via the vision model, and return the text
+description. The image itself is never returned — privacy.
+"""
+function screenshot_describe_tool(args::Dict)
+    try
+        desc = Screenshot.screenshot_description()
+        return "📸 Screen description: $desc"
+    catch e
+        return _handle_tool_error(e, "capturing/describing the screen")
+    end
 end
 
 # ─── 9. file_find ─────────────────────────────────────────
@@ -676,10 +822,17 @@ function set_reminder(args::Dict)
 
     try
         if delay_minutes > 0
-            # Schedule delayed notification
-            cmd = "sleep $(delay_minutes * 60) && notify-send -u $urgency 'Kamila Reminder' $(shell_escape_simple(message))"
-            spawn_cmd = `bash -c $cmd`
-            @async run(spawn_cmd)
+            # Persist a scheduled reminder (06.1): survives daemon restart and is
+            # delivered by the daemon's scheduler; immediate (0-delay) reminders
+            # fire instantly below.
+            Scheduler.create_job(
+                "reminder";
+                spec = Dict{String,Any}(
+                    "message" => message,
+                    "urgency" => urgency,
+                ),
+                at = now() + Minute(delay_minutes),
+            )
             return "✅ Reminder set: \"$message\" in $delay_minutes minutes. (urgency: $urgency)"
         else
             run(`notify-send -u $urgency "Kamila Reminder" "$message"`, wait = false)
@@ -737,11 +890,14 @@ function memory_query(args::Dict)
             end
             lines = ["🎯 Active Goals ($(length(goals))):"]
             for g in goals
-                pct = get(g, "progress", 0)
+                # Progress is derived from the linked plan (06.2); legacy goals
+                # without a plan report 0%.
+                pct = clamp(get(g, "progress", 0), 0, 100)
                 bar = repeat("▓", pct ÷ 10) * repeat("░", 10 - pct ÷ 10)
+                plan_tag = get(g, "plan_id", nothing) === nothing ? "" : " (plan:$(g["plan_id"]))"
                 push!(
                     lines,
-                    "  [$bar] [$(g["id"])] $(g["goal"]) (P:$(g["priority"]), $(g["category"]))",
+                    "  [$bar] [$(g["id"])] $(g["goal"]) (P:$(g["priority"]), $(g["category"]))$(plan_tag)",
                 )
             end
             return join(lines, "\n")
@@ -881,7 +1037,7 @@ function get_filtered_tools(category::String = "all")
     return filtered
 end
 
-function get_all_tools()
+function _CORE_TOOLS()
     return [
         Tool(
             "run_shell_command",
@@ -1010,10 +1166,104 @@ function get_all_tools()
             ),
             memory_query,
         ),
+        Tool(
+            "decompose_goal",
+            "Break a large goal into an ordered, dependency-resolved plan of steps and persist it as a Plan. Use for complex multi-step objectives; the result is a plan you can then execute step by step.",
+            Dict(
+                "goal" => "The goal to decompose (required)",
+                "max_steps" => "Maximum number of steps (default: 20)",
+            ),
+            decompose_goal_tool,
+        ),
+        Tool(
+            "reuse_solution",
+            "Retrieve a previously verified solution (experience record) matching a description, so you can adapt it instead of starting from scratch. Use when a similar task was solved before. Results are past records, never fabricated; verify any reuse.",
+            Dict(
+                "description" => "Describe the task to find a past verified solution for (required)",
+                "max_results" => "Maximum solutions to return (default: 1, max: 10)",
+            ),
+            reuse_solution,
+        ),
+        Tool(
+            "vision",
+            "Interpret an image on disk. Use task='describe' to get a detailed description, or task='qa' with a question to answer something specific about the image. Requires a vision-capable model (llava / llama3.2-vision); returns an error, never a guess, when unavailable.",
+            Dict(
+                "file_path" => "Absolute path to the image file (PNG/JPEG/GIF) (required)",
+                "task" => "describe (default) or qa",
+                "question" => "Question to answer about the image, used only when task=qa",
+            ),
+            vision_tool,
+        ),
+        Tool(
+            "transcribe_audio",
+            "Transcribe a local audio file (WAV/MP3/OGG/FLAC) into text. Use when the user provides a voice note or audio recording. Returns the recognized text, or a clear error when no speech-to-text backend is installed.",
+            Dict(
+                "file_path" => "Absolute path to the audio file (WAV/MP3/OGG/FLAC) (required)",
+            ),
+            transcribe_audio,
+        ),
+        Tool(
+            "desktop_status",
+            "Get a snapshot of the current desktop session: the active window title, working directory, and redacted clipboard text. Use to answer 'what is the user working on?' Requires X11 (xdotool) or Wayland (swaymsg) tools; missing fields degrade gracefully.",
+            Dict(),
+            desktop_status_tool,
+        ),
+        Tool(
+            "screenshot_describe",
+            "Capture the screen and return a text description of what is currently visible, via the vision model. The image is captured once, described, and deleted — only the description reaches the conversation. Requires a screenshot tool (scrot/import/grim) and a vision model.",
+            Dict(),
+            screenshot_describe_tool,
+        ),
     ]
 end
 
-# ─── Tool Executor ────────────────────────────────────────
+function decompose_goal_tool(args::Dict)
+    goal = get(args, "goal", "")
+    if isempty(goal)
+        return "Error: goal is required"
+    end
+    max_steps = Int(get(args, "max_steps", 20))
+    try
+        plan = Decompose.decompose_to_plan(goal; max_steps = max_steps)
+        return "Decomposed '$goal' into plan $(plan.id) with $(length(plan.steps)) steps."
+    catch e
+        return _handle_tool_error(e, "decomposing goal '$goal'")
+    end
+end
+
+# ─── Dynamic tool registration ────────────────────────────
+# Modules loaded after AgentTools (e.g. Orchestrator) can register extra tools
+# without creating a circular dependency. `get_all_tools` appends these.
+
+const _EXTRA_TOOLS = Ref{Vector{Tool}}(Tool[])
+
+"""
+Register additional tools after module load (used by Orchestrator for `batch`).
+"""
+function register_tool!(tool::Tool)
+    push!(_EXTRA_TOOLS[], tool)
+    return tool
+end
+
+function get_all_tools()
+    if _TOOL_SOURCE[] !== nothing
+        return _TOOL_SOURCE[]()
+    end
+    return vcat(
+        _CORE_TOOLS(),
+        _EXTRA_TOOLS[],
+    )
+end
+
+# 05.2: the Skills registry swaps this source at init so `get_all_tools()`
+# derives from persisted skill records (enabled only) instead of the hardcoded
+# list. Falls back to core+extra until the registry is initialized.
+const _TOOL_SOURCE = Ref{Any}(nothing)
+
+function register_tool_source!(f)
+    _TOOL_SOURCE[] = f
+    return nothing
+end
 
 function _normalize_args(args)
     if args isa Dict
@@ -1037,8 +1287,12 @@ end
 Run `tool_name` with `args` and return the raw tool result. Throws on tool
 failure so callers can categorize; `execute_tool`/`execute_tool_structured`
 are the string-returning / structured-returning wrappers.
+
+`capabilities` optionally narrows the call to a capability scope (05.3): a tool
+whose capability (or name) is not in the set is denied before execution. Used by
+batches and sub-agents so a child can never exceed its parent's capability set.
 """
-function execute_tool_raw(tool_name::String, args)
+function execute_tool_raw(tool_name::String, args; capabilities::Union{Nothing,AbstractSet} = nothing)
     cmd_args = _normalize_args(args)
     normalized = normalize_tool_name(tool_name)
 
@@ -1071,6 +1325,21 @@ function execute_tool_raw(tool_name::String, args)
         )
     end
 
+    # 05.3: capability-scope gate before contract validation / execution.
+    if capabilities !== nothing && !Capability.in_scope(normalized, capabilities)
+        throw(
+            Errors.KamilaError(
+                :permission,
+                "Tool '$normalized' is outside the capability scope of this batch/sub-agent.",
+                details = Dict(
+                    "tool" => normalized,
+                    "capability" => Capability.tool_capability(normalized),
+                    "scope" => collect(capabilities),
+                ),
+            ),
+        )
+    end
+
     # Contract validation: required args per the tool schema before calling.
     missing = _missing_required_args(tool, cmd_args)
     if !isempty(missing)
@@ -1092,9 +1361,9 @@ function execute_tool_raw(tool_name::String, args)
     return result
 end
 
-function execute_tool(tool_name::String, args)
+function execute_tool(tool_name::String, args; capabilities::Union{Nothing,AbstractSet} = nothing)
     try
-        return execute_tool_raw(tool_name, args)
+        return execute_tool_raw(tool_name, args; capabilities = capabilities)
     catch e
         return "Error executing tool '$tool_name': $(Errors.error_string(e))"
     end
@@ -1105,9 +1374,9 @@ Like `execute_tool` but returns a structured Dict the bridge can consume:
   {"ok", "category", "message", "code", "retryable", "details", "result"}
 ```
 """
-function execute_tool_structured(tool_name::String, args)
+function execute_tool_structured(tool_name::String, args; capabilities::Union{Nothing,AbstractSet} = nothing)
     try
-        result = execute_tool_raw(tool_name, args)
+        result = execute_tool_raw(tool_name, args; capabilities = capabilities)
         # Some tools still return error strings rather than throwing (e.g. the
         # task/desktop helpers). Detect and categorize those so callers (bridge,
         # agent retry) see the same structured shape for every failure mode.

@@ -28,10 +28,18 @@ const Errors = Main.Kamila.Errors
 const ModelRouter = Main.Kamila.ModelRouter
 const Confirm = Main.Kamila.Confirm
 const Permission = Main.Kamila.Permission
+const Capability = Main.Kamila.Capability
+const Decompose = Main.Kamila.Decompose
 const Search = Main.Kamila.Search
 const MemoryDB = Main.Kamila.MemoryDB
 const Episodic = Main.Kamila.Episodic
 const Context = Main.Kamila.Context
+const Scheduler = Main.Kamila.Scheduler
+const Experience = Main.Kamila.Experience
+const Vision = Main.Kamila.Vision
+const STT = Main.Kamila.STT
+const DesktopContext = Main.Kamila.DesktopContext
+const Screenshot = Main.Kamila.Screenshot
 
 # Mock HTTP — the only external seam. Production shape kept identical:
 # `escapeuri` + `get` return a MockResponse with `.body::Vector{UInt8}`.
@@ -144,9 +152,9 @@ function with_tool_sandbox(f::Function)
 end
 
 @testset "AgentTools" begin
-    @testset "Discovery: 13 tools" begin
+    @testset "Discovery: tools" begin
         tools = AT.get_all_tools()
-        @test length(tools) == 13
+        @test length(tools) == 19
         names = [t.name for t in tools]
         for expected in [
             "run_shell_command",
@@ -162,6 +170,12 @@ end
             "system_status",
             "set_reminder",
             "memory_query",
+            "decompose_goal",
+            "reuse_solution",
+            "vision",
+            "transcribe_audio",
+            "desktop_status",
+            "screenshot_describe",
         ]
             @test expected in names
         end
@@ -171,7 +185,7 @@ end
 
     @testset "get_filtered_tools categories" begin
         all_tools = AT.get_all_tools()
-        @test length(AT.get_filtered_tools("all")) == 13
+        @test length(AT.get_filtered_tools("all")) == 19
         plan_names = [t.name for t in AT.get_filtered_tools("plan")]
         @test "add_task" in plan_names
         @test "list_directory" in plan_names

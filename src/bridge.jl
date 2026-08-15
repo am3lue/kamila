@@ -12,6 +12,7 @@ using ..AgentStream
 using ..Agent
 using ..AgentTools
 using ..SystemMonitor
+using ..Events
 using ..TaskManager
 using ..KamilaMemory
 using ..Episodic
@@ -25,6 +26,16 @@ using ..CodeTracker
 using ..TTS
 using ..Confirm
 using ..Permission
+using ..Capability
+using ..Experience
+using ..Preferences
+using ..STT
+using ..DesktopContext
+using ..Screenshot
+using ..Orchestrator.Executive
+import ..Plan
+using ..Decompose
+using ..Skills
 
 export run_bridge
 
@@ -33,6 +44,29 @@ export run_bridge
 function write_json(data::Dict)
     println(JSON.json(data))
     flush(stdout)
+end
+
+"""
+Forward daemon/event-bus events to the TUI as `notification` protocol events
+(06.1). Only informational kinds are forwarded; the bridge merely observes.
+"""
+function _forward_daemon_event(e::AbstractDict)
+    kind = string(get(e, "kind", ""))
+    if kind in ("notification", "health.alert", "file.created", "file.updated")
+        try
+            write_json(
+                Dict(
+                    "type" => "notification",
+                    "kind" => kind,
+                    "title" => string(get(e, "title", "Kamila")),
+                    "body" => string(get(e, "body", "")),
+                    "source" => string(get(e, "source", "system")),
+                ),
+            )
+        catch
+        end
+    end
+    return nothing
 end
 
 function send_response(id::String, result)
@@ -339,6 +373,17 @@ end
 
 function handle_ai_query(id::String, params::AbstractDict)
     prompt = get(params, "prompt", "")
+    audio_file = get(params, "audio_file", "")
+    if isempty(prompt) && !isempty(audio_file)
+        # Voice input: transcribe the clip and feed the transcript through the
+        # normal prompt pipeline as a user message (08.2).
+        try
+            transcript = STT.transcribe(audio_file)
+            prompt = string(get(transcript, "text", ""))
+        catch e
+            return send_error(id, "Audio transcription failed: $(Errors.error_string(e))", 500)
+        end
+    end
     if isempty(prompt)
         return send_error(id, "prompt is required", 400)
     end
@@ -506,14 +551,25 @@ function handle_ai_agent_query(id::String, params::AbstractDict)
         task_type = Symbol(get(params, "task_type", "chat"))
         model = get(params, "model", "")
         max_iterations = get(params, "max_iterations", 5)
+        native = get(params, "native_tools", false)   # 05.1: prefer native tool_calls
 
-        channel = AgentStream.run_agent_stream(
-            prompt,
-            system_prompt = system_prompt,
-            task_type = task_type,
-            model = model,
-            max_iterations = max_iterations,
-        )
+        if native
+            channel = AgentStream.run_agent_stream_native(
+                prompt,
+                system_prompt = system_prompt,
+                task_type = task_type,
+                model = model,
+                max_iterations = max_iterations,
+            )
+        else
+            channel = AgentStream.run_agent_stream(
+                prompt,
+                system_prompt = system_prompt,
+                task_type = task_type,
+                model = model,
+                max_iterations = max_iterations,
+            )
+        end
 
         for event in channel
             if event isa AgentStream.TokenEvent
@@ -599,6 +655,8 @@ function handle_memory_stats(id::String, params::AbstractDict)
                         "goal" => g["goal"],
                         "category" => g["category"],
                         "priority" => g["priority"],
+                        "progress" => get(g, "progress", 0),
+                        "plan_id" => get(g, "plan_id", nothing),
                     ) for g in goals
                 ],
             ),
@@ -649,11 +707,205 @@ function handle_memory_goals(id::String, params::AbstractDict)
                 "goal" => g["goal"],
                 "category" => g["category"],
                 "priority" => g["priority"],
+                "status" => get(g, "status", "active"),
+                "progress" => get(g, "progress", 0),
+                "plan_id" => get(g, "plan_id", nothing),
             ) for g in goals
         ]
         send_response(id, result)
     catch e
         send_error(id, "Failed to list goals: $e", 500)
+    end
+end
+
+# ─── Goal Engine Handlers (06.2) ──────────────────────────
+
+function handle_goal_decompose(id::String, params::AbstractDict)
+    goal_id = get(params, "goal_id", 0)
+    if goal_id <= 0
+        return send_error(id, "goal_id is required", 400)
+    end
+    try
+        plan_id = KamilaMemory.decompose_goal(goal_id)
+        plan_id === nothing && return send_error(id, "Goal not found", 404)
+        send_response(id, Dict("success" => true, "plan_id" => plan_id))
+    catch e
+        send_error(id, "Failed to decompose goal: $e", 500)
+    end
+end
+
+function handle_goal_link_plan(id::String, params::AbstractDict)
+    goal_id = get(params, "goal_id", 0)
+    plan_id = get(params, "plan_id", "")
+    if goal_id <= 0 || isempty(plan_id)
+        return send_error(id, "goal_id and plan_id are required", 400)
+    end
+    try
+        ok = KamilaMemory.link_goal_plan(goal_id, plan_id)
+        ok || return send_error(id, "Plan not found", 404)
+        send_response(id, Dict("success" => true))
+    catch e
+        send_error(id, "Failed to link plan: $e", 500)
+    end
+end
+
+function handle_goal_progress(id::String, params::AbstractDict)
+    goal_id = get(params, "goal_id", 0)
+    if goal_id <= 0
+        return send_error(id, "goal_id is required", 400)
+    end
+    try
+        progress = KamilaMemory.goal_progress(goal_id)
+        progress === nothing && return send_error(id, "Goal not found or no linked plan", 404)
+        send_response(id, Dict("goal_id" => goal_id, "progress" => progress))
+    catch e
+        send_error(id, "Failed to compute goal progress: $e", 500)
+    end
+end
+
+# ─── Orchestrator Handlers (06.3) ─────────────────────────
+
+function handle_orchestrator_status(id::String, _params)
+    try
+        send_response(id, Executive.status())
+    catch e
+        send_error(id, "Failed to get orchestrator status: $e", 500)
+    end
+end
+
+function handle_orchestrator_advance_now(id::String, params::AbstractDict)
+    try
+        plan_id = get(params, "plan_id", nothing)
+        plan_id === nothing && return send_error(id, "plan_id is required", 400)
+        result = Executive.advance_now(; plan_id = String(plan_id))
+        send_response(id, result)
+    catch e
+        send_error(id, "Failed to advance work: $e", 500)
+    end
+end
+
+function handle_orchestrator_toggle_auto(id::String, params::AbstractDict)
+    try
+        on = Bool(get(params, "auto_execute", false))
+        Executive.set_auto_execute(on)
+        send_response(id, Dict("auto_execute" => Executive.auto_execute()))
+    catch e
+        send_error(id, "Failed to toggle auto-execute: $e", 500)
+    end
+end
+
+function handle_orchestrator_pause(id::String, _params)
+    try
+        Executive.pause()
+        send_response(id, Dict("paused" => true))
+    catch e
+        send_error(id, "Failed to pause orchestrator: $e", 500)
+    end
+end
+
+# ─── Experience Handlers (07.1) ───────────────────────────
+
+function handle_experience_reuse(id::String, params::AbstractDict)
+    try
+        description = get(params, "description", "")
+        if isempty(description)
+            return send_error(id, "description is required", 400)
+        end
+        k = clamp(Int(get(params, "k", 1)), 1, 10)
+        results = Experience.similar_solution(description; k = k)
+        send_response(id, Dict("results" => results, "count" => length(results)))
+    catch e
+        send_error(id, "Failed to search experience: $e", 500)
+    end
+end
+
+function handle_experience_search(id::String, params::AbstractDict)
+    try
+        query = get(params, "query", "")
+        if isempty(query)
+            return send_error(id, "query is required", 400)
+        end
+        k = clamp(Int(get(params, "k", 10)), 1, 50)
+        verified = get(params, "verified", true) === nothing ? nothing :
+                   Bool(get(params, "verified", true))
+        results = Experience.search(query; k = k, verified = verified)
+        send_response(id, Dict("results" => results, "count" => length(results)))
+    catch e
+        send_error(id, "Failed to search experience: $e", 500)
+    end
+end
+
+function handle_experience_export(id::String, params::AbstractDict)
+    try
+        path = get(params, "path", "")
+        if isempty(path)
+            return send_error(id, "path is required", 400)
+        end
+        n = Experience.export_rows(path)
+        send_response(id, Dict("path" => path, "rows" => n))
+    catch e
+        send_error(id, "Failed to export experience: $e", 500)
+    end
+end
+
+# ─── Preference Handlers (07.3) ───────────────────────────
+
+function handle_feedback_record(id::String, params::AbstractDict)
+    try
+        key = string(get(params, "key", ""))
+        value = string(get(params, "value", ""))
+        if isempty(key) || isempty(value)
+            return send_error(id, "key and value are required", 400)
+        end
+        explicit = Bool(get(params, "explicit", true))
+        session = string(get(params, "session", ""))
+        committed, current = Preferences.record_signal(
+            key,
+            value;
+            explicit = explicit,
+            session = session,
+        )
+        send_response(
+            id,
+            Dict("committed" => committed, "value" => current, "key" => key),
+        )
+    catch e
+        send_error(id, "Failed to record feedback: $e", 500)
+    end
+end
+
+function handle_preferences_get(id::String, params::AbstractDict)
+    try
+        all = Preferences.all_preferences()
+        active = Preferences.active_preferences()
+        send_response(id, Dict("preferences" => all, "active" => active))
+    catch e
+        send_error(id, "Failed to read preferences: $e", 500)
+    end
+end
+
+function handle_preferences_revert(id::String, params::AbstractDict)
+    try
+        key = string(get(params, "key", ""))
+        if isempty(key)
+            return send_error(id, "key is required", 400)
+        end
+        restored = Preferences.revert_preference(key)
+        send_response(id, Dict("key" => key, "restored" => restored))
+    catch e
+        send_error(id, "Failed to revert preference: $e", 500)
+    end
+end
+
+function handle_preferences_history(id::String, params::AbstractDict)
+    try
+        key = string(get(params, "key", ""))
+        limit = clamp(Int(get(params, "limit", 30)), 1, 200)
+        rows = isempty(key) ? Preferences.preference_history_all(limit = limit) :
+               Preferences.preference_history(key; limit = limit)
+        send_response(id, Dict("events" => rows))
+    catch e
+        send_error(id, "Failed to read preference history: $e", 500)
     end
 end
 
@@ -791,7 +1043,27 @@ end
 # ─── Permission ───────────────────────────────────────────
 
 function handle_permission_get(id::String, params::AbstractDict)
-    send_response(id, Dict("policy" => Permission.get_policy()))
+    policy = Permission.get_policy()
+    send_response(
+        id,
+        Dict(
+            "policy" => policy,
+            "capabilities" => Dict{String,Any}(
+                "tool_map" => Capability.TOOL_CAPABILITY,
+                "granted" => [
+                    cap for cap in union(
+                        get(policy, "default_capabilities", Any[]),
+                        [
+                            string(rule["tool"])[5:end]
+                            for rule in get(policy, "rules", Any[])
+                            if startswith(string(get(rule, "tool", "")), "cap:") &&
+                               string(get(rule, "action", "")) == "allow"
+                        ],
+                    )
+                ],
+            ),
+        ),
+    )
 end
 
 function handle_permission_set(id::String, params::AbstractDict)
@@ -822,6 +1094,15 @@ end
 function handle_permission_decisions(id::String, params::AbstractDict)
     limit = get(params, "limit", 50)
     send_response(id, Dict("decisions" => Permission.recent_decisions(limit)))
+end
+
+function handle_capability_audit(id::String, params::AbstractDict)
+    limit = get(params, "limit", 50)
+    kind = string(get(params, "kind", ""))
+    send_response(
+        id,
+        Dict("checks" => Capability.capability_audit(limit; kind = kind)),
+    )
 end
 
 function handle_auth_status(id::String, params::AbstractDict)
@@ -944,6 +1225,67 @@ function handle_tts_speak(id::String, params::AbstractDict)
     end
 end
 
+# ─── Audio (STT) Handlers (08.2) ─────────────────────────
+
+function handle_audio_transcribe(id::String, params::AbstractDict)
+    file_path = get(params, "file_path", "")
+    if isempty(file_path)
+        return send_error(id, "file_path is required", 400)
+    end
+    try
+        result = STT.transcribe(file_path)
+        send_response(id, result)
+    catch e
+        send_error(id, "Transcription failed: $(Errors.error_string(e))", 500)
+    end
+end
+
+function handle_audio_record(id::String, params::AbstractDict)
+    seconds = Int(get(params, "seconds", 5))
+    recorder = get(params, "recorder", nothing)
+    try
+        result = STT.record_clip(seconds; recorder = recorder)
+        send_response(id, result)
+    catch e
+        send_error(id, "Recording failed: $(Errors.error_string(e))", 500)
+    end
+end
+
+# ─── Desktop Context Handlers (08.3) ────────────────────
+
+function handle_desktop_status(id::String, params::AbstractDict)
+    try
+        send_response(id, DesktopContext.desktop_status())
+    catch e
+        send_error(id, "Failed to get desktop context: $(Errors.error_string(e))", 500)
+    end
+end
+
+function handle_desktop_screenshot(id::String, params::AbstractDict)
+    try
+        desc = Screenshot.screenshot_description()
+        send_response(id, Dict("description" => desc))
+    catch e
+        send_error(id, "Screenshot failed: $(Errors.error_string(e))", 500)
+    end
+end
+
+function handle_desktop_watch(id::String, params::AbstractDict)
+    enable = get(params, "enable", false) == true || get(params, "enable", false) == "true"
+    DesktopContext.set_watch_enabled!(enable)
+    # Proactive watcher emits a desktop.activity event when enabled; the daemon
+    # (06.1) polls and publishes hints from it.
+    Events.publish(
+        Dict(
+            "kind" => "desktop.activity",
+            "status" => DesktopContext.desktop_status(),
+            "enabled" => enable,
+            "source" => "bridge",
+        ),
+    )
+    send_response(id, Dict("watch_enabled" => DesktopContext.watch_enabled()))
+end
+
 # ─── System Info Handlers ─────────────────────────────────
 
 function handle_system_info(id::String, params::AbstractDict)
@@ -968,6 +1310,175 @@ function handle_system_latency(id::String, params::AbstractDict)
         send_response(id, Dict("ollama_ms" => ollama_ms, "internet_ms" => internet_ms))
     catch e
         send_error(id, "Failed to measure latency: $e", 500)
+    end
+end
+
+# ─── Plan routes ──────────────────────────────────────────
+
+function handle_plan_create(id::String, params::AbstractDict)
+    try
+        goal = get(params, "goal", "")
+        steps_raw = get(params, "steps", [])
+        session = get(params, "session", "default")
+
+        steps = [
+            (
+                description = get(s, "description", ""),
+                depends_on = Int[Int(d) for d in get(s, "depends_on", Int[])],
+                tool = get(s, "tool", ""),
+                args = Dict{String,Any}(get(s, "args", Dict())),
+            ) for s in steps_raw
+        ]
+        p = Plan.create(goal, steps; session = session)
+        send_response(id, Plan._summarize(p))
+    catch e
+        send_error(id, "Failed to create plan: $(Errors.error_string(e))", 400)
+    end
+end
+
+function handle_plan_decompose(id::String, params::AbstractDict)
+    try
+        goal = get(params, "goal", "")
+        isempty(goal) && return send_error(id, "goal is required", 400)
+        session = get(params, "session", "default")
+        max_steps = Int(get(params, "max_steps", 20))
+        plan = Decompose.decompose_to_plan(goal; session = session, max_steps = max_steps)
+        send_response(id, Plan._summarize(plan))
+    catch e
+        send_error(id, "Failed to decompose goal: $(Errors.error_string(e))", 500)
+    end
+end
+
+# ─── skills.* routes (05.2) ───────────────────────────────
+
+function handle_skills_list(id::String, _params)
+    try
+        send_response(id, Dict("skills" => Skills.list()))
+    catch e
+        send_error(id, "Failed to list skills: $e", 500)
+    end
+end
+
+function handle_skills_show(id::String, params::AbstractDict)
+    try
+        name = get(params, "name", "")
+        isempty(name) && return send_error(id, "name is required", 400)
+        send_response(id, Skills.show_skill(name))
+    catch e
+        send_error(id, "Failed to show skill: $(Errors.error_string(e))", 500)
+    end
+end
+
+function handle_skills_enable(id::String, params::AbstractDict)
+    try
+        name = get(params, "name", "")
+        isempty(name) && return send_error(id, "name is required", 400)
+        Skills.enable!(name)
+        send_response(id, Dict("name" => name, "enabled" => true))
+    catch e
+        send_error(id, "Failed to enable skill: $(Errors.error_string(e))", 500)
+    end
+end
+
+function handle_skills_disable(id::String, params::AbstractDict)
+    try
+        name = get(params, "name", "")
+        isempty(name) && return send_error(id, "name is required", 400)
+        Skills.disable!(name)
+        send_response(id, Dict("name" => name, "enabled" => false))
+    catch e
+        send_error(id, "Failed to disable skill: $(Errors.error_string(e))", 500)
+    end
+end
+
+function handle_skills_install(id::String, params::AbstractDict)
+    try
+        spec = get(params, "spec", Dict())
+        spec isa AbstractDict || return send_error(id, "spec must be an object", 400)
+        source = get(params, "source", "user")
+        enabled = get(params, "enabled", true)
+        skill = Skills.install!(spec; source = string(source), enabled = Bool(enabled))
+        send_response(id, Dict("name" => skill.name, "enabled" => skill.enabled, "source" => skill.source))
+    catch e
+        send_error(id, "Failed to install skill: $(Errors.error_string(e))", 500)
+    end
+end
+
+function handle_skills_uninstall(id::String, params::AbstractDict)
+    try
+        name = get(params, "name", "")
+        isempty(name) && return send_error(id, "name is required", 400)
+        Skills.uninstall!(name)
+        send_response(id, Dict("name" => name, "removed" => true))
+    catch e
+        send_error(id, "Failed to uninstall skill: $(Errors.error_string(e))", 500)
+    end
+end
+
+function handle_plan_list(id::String, params::AbstractDict)
+    try
+        status = get(params, "status", nothing)
+        status === nothing || status == "" || (status = Symbol(status))
+        plans = Plan.list(; status = status)
+        send_response(id, plans)
+    catch e
+        send_error(id, "Failed to list plans: $e", 500)
+    end
+end
+
+function handle_plan_status(id::String, params::AbstractDict)
+    try
+        plan_id = get(params, "id", "")
+        isempty(plan_id) && return send_error(id, "id is required", 400)
+        p = Plan.load(plan_id)
+        p === nothing && return send_error(id, "plan not found", 404)
+        send_response(
+            id,
+            Dict(
+                "id" => p.id,
+                "goal" => p.goal,
+                "status" => string(p.status),
+                "steps" => [
+                    Dict(
+                        "id" => s.id,
+                        "description" => s.description,
+                        "status" => string(s.status),
+                        "depends_on" => s.depends_on,
+                        "tool" => s.tool,
+                        "attempts" => s.attempts,
+                        "result" => s.result,
+                    ) for s in p.steps
+                ],
+            ),
+        )
+    catch e
+        send_error(id, "Failed to get plan status: $e", 500)
+    end
+end
+
+function handle_plan_cancel(id::String, params::AbstractDict)
+    try
+        plan_id = get(params, "id", "")
+        isempty(plan_id) && return send_error(id, "id is required", 400)
+        p = Plan.load(plan_id)
+        p === nothing && return send_error(id, "plan not found", 404)
+        Plan.cancel(p)
+        send_response(id, Dict("id" => p.id, "status" => string(p.status)))
+    catch e
+        send_error(id, "Failed to cancel plan: $e", 500)
+    end
+end
+
+function handle_plan_resume(id::String, params::AbstractDict)
+    try
+        plan_id = get(params, "id", "")
+        isempty(plan_id) && return send_error(id, "id is required", 400)
+        p = Plan.load(plan_id)
+        p === nothing && return send_error(id, "plan not found", 404)
+        Plan.resume(p)
+        send_response(id, Dict("id" => p.id, "status" => string(p.status)))
+    catch e
+        send_error(id, "Failed to resume plan: $e", 500)
     end
 end
 
@@ -997,6 +1508,20 @@ const ROUTES = Dict(
     "memory.add_goal" => handle_memory_add_goal,
     "memory.complete_goal" => handle_memory_complete_goal,
     "memory.goals" => handle_memory_goals,
+    "goal.decompose" => handle_goal_decompose,
+    "goal.link_plan" => handle_goal_link_plan,
+    "goal.progress" => handle_goal_progress,
+    "orchestrator.status" => handle_orchestrator_status,
+    "orchestrator.advance_now" => handle_orchestrator_advance_now,
+    "orchestrator.toggle_auto" => handle_orchestrator_toggle_auto,
+    "orchestrator.pause" => handle_orchestrator_pause,
+    "experience.reuse" => handle_experience_reuse,
+    "experience.search" => handle_experience_search,
+    "experience.export" => handle_experience_export,
+    "feedback.record" => handle_feedback_record,
+    "preferences.get" => handle_preferences_get,
+    "preferences.revert" => handle_preferences_revert,
+    "preferences.history" => handle_preferences_history,
     "file.list" => handle_file_list,
     "model.list" => handle_model_list,
     "model.select" => handle_model_select,
@@ -1011,6 +1536,7 @@ const ROUTES = Dict(
     "permission.set" => handle_permission_set,
     "permission.reset" => handle_permission_reset,
     "permission.decisions" => handle_permission_decisions,
+    "capability.audit" => handle_capability_audit,
     "auth.setup" => handle_auth_setup,
     "auth.change_password" => handle_auth_change_password,
     "auth.reset" => handle_auth_reset,
@@ -1019,6 +1545,23 @@ const ROUTES = Dict(
     "code_tracker.init" => handle_code_tracker_init,
     "code_tracker.scan" => handle_code_tracker_scan,
     "tts.speak" => handle_tts_speak,
+    "audio.transcribe" => handle_audio_transcribe,
+    "audio.record" => handle_audio_record,
+    "desktop.status" => handle_desktop_status,
+    "desktop.screenshot" => handle_desktop_screenshot,
+    "desktop.watch" => handle_desktop_watch,
+    "plan.create" => handle_plan_create,
+    "plan.list" => handle_plan_list,
+    "plan.status" => handle_plan_status,
+    "plan.cancel" => handle_plan_cancel,
+    "plan.resume" => handle_plan_resume,
+    "plan.decompose" => handle_plan_decompose,
+    "skills.list" => handle_skills_list,
+    "skills.show" => handle_skills_show,
+    "skills.enable" => handle_skills_enable,
+    "skills.disable" => handle_skills_disable,
+    "skills.install" => handle_skills_install,
+    "skills.uninstall" => handle_skills_uninstall,
 )
 
 function dispatch(request::AbstractDict)
@@ -1087,6 +1630,10 @@ end
 function run_bridge(; read_timeout::Float64 = 300.0)
     Confirm.set_backend(:bridge)
     load_chat_history_from_disk()
+
+    # 06.1: forward daemon-sourced events to the TUI as `notification` protocol
+    # events. Handlers run on the publisher's thread; the bridge only observes.
+    Events.subscribe("", _forward_daemon_event)
 
     # No automatic session start - uses "default" session unless explicitly started
     # Users who want explicit session isolation can call Episodic.start_session()

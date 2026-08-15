@@ -27,10 +27,10 @@ end
 
 @testset "MemoryDB" begin
 
-    @testset "schema version starts at 3 after init" begin
+    @testset "schema version starts at 6 after init" begin
         with_fresh_db() do
             db = MDB.ensure_open()
-            @test MDB.schema_version(db) == 3
+            @test MDB.schema_version(db) == 10
         end
     end
 
@@ -40,10 +40,10 @@ end
             v1 = MDB.schema_version(db)
             MDB.migrate!(db)
             v2 = MDB.schema_version(db)
-            @test v1 == v2 == 3
+            @test v1 == v2 == 10
             # Run again - should be no-op
             MDB.migrate!(db)
-            @test MDB.schema_version(db) == 3
+            @test MDB.schema_version(db) == 10
         end
     end
 
@@ -86,7 +86,7 @@ end
                 try
                     MDB.reset!()
                     db = MDB.ensure_open()
-                    @test MDB.schema_version(db) == 3
+                    @test MDB.schema_version(db) == 10
                     # Check imported data
                     alias =
                         MDB.query_all("SELECT value FROM kv WHERE key = ?", "user_alias")

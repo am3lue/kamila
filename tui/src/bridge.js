@@ -332,6 +332,30 @@ class KamilaBridge {
     return this.send('tts.speak', { text });
   }
 
+  // ─── STT / Voice (08.2) ────────────────────────────
+
+  async audioTranscribe(filePath) {
+    return this.send('audio.transcribe', { file_path: filePath });
+  }
+
+  async audioRecord(seconds = 3) {
+    return this.send('audio.record', { seconds });
+  }
+
+  // ─── Desktop Context (08.3) ─────────────────────────
+
+  async desktopStatus() {
+    return this.send('desktop.status', {});
+  }
+
+  async desktopScreenshot() {
+    return this.send('desktop.screenshot', {});
+  }
+
+  async desktopWatch(enable) {
+    return this.send('desktop.watch', { enable });
+  }
+
   // ─── Permission ───────────────────────────────────────
 
   async permissionGet() {

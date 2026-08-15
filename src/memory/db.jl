@@ -21,7 +21,7 @@ const _LOCK = ReentrantLock()
 DB_PATH() =
     get(ENV, "KAMILA_DB", joinpath(homedir(), ".local", "state", "kamila", "kamila.db"))
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 10
 
 function _ddl()
     return [
@@ -147,6 +147,127 @@ function _ddl()
             INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
         END
         """,
+        """
+        CREATE TABLE IF NOT EXISTS plans (
+            id TEXT PRIMARY KEY,
+            goal TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            session TEXT NOT NULL,
+            metadata TEXT NOT NULL DEFAULT '{}'
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS plan_steps (
+            plan_id TEXT NOT NULL,
+            step_id INTEGER NOT NULL,
+            description TEXT NOT NULL,
+            status TEXT NOT NULL,
+            depends_on TEXT NOT NULL DEFAULT '[]',
+            tool TEXT NOT NULL DEFAULT '',
+            args TEXT NOT NULL DEFAULT '{}',
+            result TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            verify TEXT,
+            PRIMARY KEY (plan_id, step_id),
+            FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE CASCADE
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_plan_steps_plan ON plan_steps(plan_id)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS skills (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            spec TEXT NOT NULL DEFAULT '{}',
+            description TEXT NOT NULL DEFAULT '',
+            impl_type TEXT NOT NULL,
+            impl_ref TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            source TEXT NOT NULL DEFAULT 'builtin',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name)
+        """,
+        # 06.1: persisted scheduled jobs for the proactive daemon (reminders,
+        # health checks, daily reports). `next_run_at` drives catch-up on boot.
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_jobs (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            spec TEXT NOT NULL DEFAULT '{}',
+            next_run_at TEXT NOT NULL,
+            interval_seconds INTEGER,
+            last_status TEXT NOT NULL DEFAULT 'pending',
+            last_run_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run ON scheduled_jobs(next_run_at)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS experience (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            kind TEXT NOT NULL,           -- 'plan' | 'tool' | 'conversation'
+            goal TEXT,
+            plan_id TEXT,
+            step_id INTEGER,
+            prompt TEXT,
+            tool TEXT,
+            args TEXT,
+            result TEXT,
+            verified INTEGER NOT NULL DEFAULT 0,
+            role TEXT,                    -- assistant | user | system
+            feedback INTEGER,             -- -1 dislike, 0 neutral, +1 like
+            cost_tokens INTEGER,
+            duration_ms INTEGER
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_experience_ts ON experience(ts)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_experience_kind ON experience(kind)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_experience_verified ON experience(verified)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS preferences (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            committed_default TEXT,
+            source TEXT NOT NULL DEFAULT 'default',
+            ts TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS preference_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            weight REAL NOT NULL,
+            explicit INTEGER NOT NULL DEFAULT 0,
+            session TEXT,
+            ts TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_preference_events_key_ts
+            ON preference_events(key, ts)
+        """,
     ]
 end
 
@@ -195,6 +316,10 @@ function schema_version(db::SQLite.DB)
     catch
         return 0
     end
+end
+
+function schema_version()
+    return schema_version(ensure_open())
 end
 
 function _import_legacy!(db::SQLite.DB, legacy_json::AbstractString)
@@ -372,6 +497,120 @@ function migrate!(db::SQLite.DB; legacy_json::Union{String,Nothing} = nothing)
             db,
             "INSERT OR REPLACE INTO migrations (version, applied_at) VALUES (?, ?)",
             (3, string(now())),
+        )
+    end
+    if v < 4
+        KamilaLog.info(
+            "Running database migration to schema v4 (plans, plan_steps)";
+            mod = "memory",
+        )
+        # Base DDL already created the tables idempotently above; record the version.
+        for stmt in ["ALTER TABLE plan_steps ADD COLUMN verify TEXT"]
+            try
+                SQLite.execute(db, stmt)
+            catch e
+                KamilaLog.warn(
+                    "Migration v4 column add failed (may already exist): $e";
+                    mod = "memory",
+                )
+            end
+        end
+        SQLite.execute(db, "PRAGMA user_version = 4")
+        SQLite.execute(
+            db,
+            "INSERT OR REPLACE INTO migrations (version, applied_at) VALUES (?, ?)",
+            (4, string(now())),
+        )
+    end
+
+    if v < 5
+        KamilaLog.info(
+            "Running database migration to schema v5 (skills)";
+            mod = "memory",
+        )
+        # Base DDL already created the table idempotently above; record the version.
+        for stmt in ["ALTER TABLE skills ADD COLUMN description TEXT NOT NULL DEFAULT ''"]
+            try
+                SQLite.execute(db, stmt)
+            catch e
+                KamilaLog.warn(
+                    "Migration v5 column add failed (may already exist): $e";
+                    mod = "memory",
+                )
+            end
+        end
+        SQLite.execute(db, "PRAGMA user_version = 5")
+        SQLite.execute(
+            db,
+            "INSERT OR REPLACE INTO migrations (version, applied_at) VALUES (?, ?)",
+            (5, string(now())),
+        )
+    end
+
+    if v < 6
+        KamilaLog.info(
+            "Running database migration to schema v6 (scheduled_jobs)";
+            mod = "memory",
+        )
+        # Base DDL already created the table idempotently above; record the version.
+        SQLite.execute(db, "PRAGMA user_version = 6")
+        SQLite.execute(
+            db,
+            "INSERT OR REPLACE INTO migrations (version, applied_at) VALUES (?, ?)",
+            (6, string(now())),
+        )
+    end
+
+    if v < 7
+        KamilaLog.info(
+            "Running database migration to schema v7 (goals.plan_id, status)";
+            mod = "memory",
+        )
+        for stmt in [
+            "ALTER TABLE goals ADD COLUMN plan_id TEXT",
+            "ALTER TABLE goals ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+            "CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status)",
+        ]
+            try
+                SQLite.execute(db, stmt)
+            catch e
+                KamilaLog.warn(
+                    "Migration v7 column add failed (may already exist): $e";
+                    mod = "memory",
+                )
+            end
+        end
+        SQLite.execute(db, "PRAGMA user_version = 7")
+        SQLite.execute(
+            db,
+            "INSERT OR REPLACE INTO migrations (version, applied_at) VALUES (?, ?)",
+            (7, string(now())),
+        )
+    end
+    if v < 8
+        KamilaLog.info(
+            "Running database migration to schema v8 (experience)";
+            mod = "memory",
+        )
+        # Base DDL already created the table idempotently above; record the version.
+        SQLite.execute(db, "PRAGMA user_version = 8")
+        SQLite.execute(
+            db,
+            "INSERT OR REPLACE INTO migrations (version, applied_at) VALUES (?, ?)",
+            (8, string(now())),
+        )
+    end
+    if v < 10
+        KamilaLog.info(
+            "Running database migration to schema v10 (preferences)";
+            mod = "memory",
+        )
+        # Base DDL already created the tables idempotently above; record the version.
+        SQLite.execute(db, "PRAGMA user_version = 10")
+        SQLite.execute(
+            db,
+            "INSERT OR REPLACE INTO migrations (version, applied_at) VALUES (?, ?)",
+            (10, string(now())),
         )
     end
     return schema_version(db)

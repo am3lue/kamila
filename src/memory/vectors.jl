@@ -44,11 +44,10 @@ function embed(text::String; model::String = EMBED_MODEL)
     isempty(strip(text)) && return nothing
 
     hash = _content_hash(text)
-    lock(_CACHE_LOCK) do
-        if haskey(_EMBED_CACHE, hash)
-            return _EMBED_CACHE[hash]
-        end
+    cached = lock(_CACHE_LOCK) do
+        get(_EMBED_CACHE, hash, nothing)
     end
+    cached !== nothing && return cached
 
     try
         response = HTTP.post(

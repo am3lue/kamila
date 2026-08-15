@@ -4,6 +4,7 @@ using ..OllamaInterface
 using ..AgentTools
 using ..TTS
 using ..ResponseParser
+using ..Preferences
 using JSON
 
 export parse_response,
@@ -19,19 +20,17 @@ const MAX_ITERATIONS = 10
 function get_system_prompt()
     tools = AgentTools.get_all_tools()
 
+    # 05.1: list tool names with a one-line hint only. Full JSON schemas travel
+    # via the native `tools` array (Ollama /api/chat) so the prompt stays small.
     tools_desc = []
     for tool in tools
         push!(
             tools_desc,
-            Dict(
-                "name" => tool.name,
-                "description" => tool.description,
-                "parameters" => tool.parameters,
-            ),
+            "$(tool.name) — $(tool.description)",
         )
     end
 
-    json_tools = JSON.json(tools_desc)
+    json_tools = join(tools_desc, "\n")
 
     parts = [
         "You are Kamila, an intelligent, strategic, and exceptionally polite autonomous AI assistant running on Linux.",
@@ -42,7 +41,8 @@ function get_system_prompt()
         "- DO NOT follow the cycle blindly. Identify which steps are actually needed for the specific task.",
         "- If a task is simple and you already have the answer, provide the Final Response immediately.",
         "- If you need to perform actions, explain your reasoning (Thought) before calling a tool.",
-        "- You can skip the 'Check' phase if the tool output is definitive and self-explanatory.",
+        "- The 'Check' phase is ENFORCED for side-effecting steps in plans: a step is only marked verified after its `verify` spec passes. Do not skip verification. If a step's verification fails, use the evidence to correct the action and retry.",
+        "- When verification is skipped, the step must declare `verify=nothing` and the skip is logged with justification.",
         "- Be concise but always maintain your polite demeanor.",
         "",
         "## TOOL USAGE:",
@@ -61,24 +61,34 @@ function get_system_prompt()
 end
 
 function get_chat_system_prompt()
-    return join(
-        [
-            "You are Kamila, a warm, helpful, and intelligent AI assistant running on Linux.",
-            "Your personality is friendly, kind, and professional.",
-            "Respond naturally and conversationally — like a thoughtful friend who knows a lot.",
-            "Be concise but thorough. Use a warm tone.",
-            "You have tools to actually DO things. When the user asks you to perform an action",
-            "(create a file, run a command, search, etc.), you MUST use the appropriate tool.",
-            "Do NOT just describe what you would do — actually do it using a tool.",
-            "To call a tool, respond with your natural text followed by JSON:",
-            "Your text here... {\"tool\": \"tool_name\", \"args\": {...}}",
-            "Available tools: run_shell_command, list_directory, read_file, write_file,",
-            "add_task, list_tasks, complete_task, web_search, file_find, grep_search,",
-            "system_status, set_reminder, memory_query.",
-            "Always call a tool when an action is needed. Just saying you'll do it is not enough.",
-        ],
-        "\n",
-    )
+    lines = [
+        "You are Kamila, a warm, helpful, and intelligent AI assistant running on Linux.",
+        "Your personality is friendly, kind, and professional.",
+        "Respond naturally and conversationally — like a thoughtful friend who knows a lot.",
+        "Be concise but thorough. Use a warm tone.",
+        "You have tools to actually DO things. When the user asks you to perform an action",
+        "(create a file, run a command, search, etc.), you MUST use the appropriate tool.",
+        "Do NOT just describe what you would do — actually do it using a tool.",
+        "To call a tool, respond with your natural text followed by JSON:",
+        "Your text here... {\"tool\": \"tool_name\", \"args\": {...}}",
+        "Available tools: run_shell_command, list_directory, read_file, write_file,",
+        "add_task, list_tasks, complete_task, web_search, file_find, grep_search,",
+        "system_status, set_reminder, memory_query, reuse_solution.",
+        "Always call a tool when an action is needed. Just saying you'll do it is not enough.",
+    ]
+
+    # 07.3: surface committed (non-default) preferences only, never raw history.
+    active = Preferences.active_preferences()
+    if !isempty(active)
+        prefs = ["- $k: $v" for (k, v) in sort(collect(active))]
+        push!(
+            lines,
+            "# preferences (committed user preferences — honor these):",
+        )
+        append!(lines, prefs)
+    end
+
+    return join(lines, "\n")
 end
 
 function get_planning_prompt()

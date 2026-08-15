@@ -14,17 +14,34 @@ Targets map to files:
     agent      -> test/agent_test.jl
     agentstream-> test/agent_stream_test.jl
     memory     -> test/memory_test.jl
+    plan       -> test/plan_test.jl
+    orchestrator-> test/orchestrator_test.jl
+    verify     -> test/verify_test.jl
+    decompose  -> test/decompose_test.jl
+    toolspec   -> test/tool_spec_test.jl
+    skill      -> test/skill_test.jl
     tasks      -> test/task_manager_test.jl
     security   -> test/security_test.jl
     bridge     -> test/bridge_test.jl
     confirm    -> test/confirm_test.jl
     permission -> test/permission_test.jl
+    capability -> test/capability_test.jl
     monitor    -> test/monitor_test.jl
     search     -> test/search_test.jl
     modelrouter-> test/model_router_test.jl
     log        -> test/log_test.jl
     error      -> test/error_taxonomy_test.jl
     lint       -> test/lint_test.jl
+    daemon     -> test/daemon_test.jl
+    goal       -> test/goal_test.jl
+    executive  -> test/executive_test.jl
+    experience -> test/experience_test.jl
+    eval       -> test/eval_test.jl
+    preference -> test/preference_test.jl
+    vision     -> test/vision_test.jl
+    stt        -> test/stt_test.jl
+    desktop    -> test/desktop_context_test.jl
+    predictor  -> test/outcome_predictor_test.jl
 """
 
 using Test
@@ -39,6 +56,7 @@ const TARGETS = Dict(
     "bridge" => "bridge_test.jl",
     "confirm" => "confirm_test.jl",
     "permission" => "permission_test.jl",
+    "capability" => "capability_test.jl",
     "monitor" => "monitor_test.jl",
     "search" => "search_test.jl",
     "modelrouter" => "model_router_test.jl",
@@ -49,6 +67,22 @@ const TARGETS = Dict(
     "vectors" => "vectors_test.jl",
     "episodic" => "episodic_test.jl",
     "context" => "context_test.jl",
+    "plan" => "plan_test.jl",
+    "orchestrator" => "orchestrator_test.jl",
+    "verify" => "verify_test.jl",
+    "decompose" => "decompose_test.jl",
+    "toolspec" => "tool_spec_test.jl",
+    "skill" => "skill_test.jl",
+    "daemon" => "daemon_test.jl",
+    "goal" => "goal_test.jl",
+    "executive" => "executive_test.jl",
+    "experience" => "experience_test.jl",
+    "eval" => "eval_test.jl",
+    "preference" => "preference_test.jl",
+    "vision" => "vision_test.jl",
+    "stt" => "stt_test.jl",
+    "desktop" => "desktop_context_test.jl",
+    "predictor" => "outcome_predictor_test.jl",
 )
 
 function parse_args()
@@ -133,7 +167,7 @@ with_sandbox() do info
     # `const` at module load time.
     mock = nothing
     old_ollama_host = get(ENV, "OLLAMA_HOST", nothing)
-    if "bridge" in targets || "modelrouter" in targets
+    if "bridge" in targets || "modelrouter" in targets || "toolspec" in targets || "vision" in targets || "stt" in targets || "desktop" in targets
         mock = OllamaMockServer.start_mock_server()
         ENV["OLLAMA_HOST"] = "http://127.0.0.1:$(OllamaMockServer.server_port(mock))"
         TEST_SANDBOX[]["mock_server"] = mock

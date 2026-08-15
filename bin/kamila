@@ -29,6 +29,9 @@ show_help() {
     echo "  --help, -h        Show this help message"
     echo "  --version, -v     Show version information"
     echo "  --bridge          Start Julia backend in JSON-RPC bridge mode"
+    echo "  --daemon          Start the background proactive daemon"
+    echo "  --daemon-status   Show daemon status (pid file)"
+    echo "  --daemon-stop     Send SIGTERM to a running daemon"
     echo "  --setup           Run initial setup"
     echo ""
     echo "Examples:"
@@ -113,6 +116,24 @@ case "${1:-}" in
         shift
         setup_logging
         julia --project="$PROJECT_DIR" -e "include(\"src/Kamila.jl\"); using .Kamila; Kamila.KamilaBridge.run_bridge(; read_timeout=86400.0)"
+        exit $?
+        ;;
+    --daemon)
+        shift
+        setup_logging
+        julia --project="$PROJECT_DIR" src/Kamila.jl --daemon
+        exit $?
+        ;;
+    --daemon-status)
+        shift
+        setup_logging
+        julia --project="$PROJECT_DIR" src/Kamila.jl --daemon-status
+        exit $?
+        ;;
+    --daemon-stop)
+        shift
+        setup_logging
+        julia --project="$PROJECT_DIR" src/Kamila.jl --daemon-stop
         exit $?
         ;;
     "")

@@ -29,13 +29,17 @@ const CURL_MAX_TIME = get(ENV, "KAMILA_CURL_MAX_TIME", "15")
 
 # A streamed item from an Ollama chat/generate stream. `is_thinking` marks
 # reasoning output (e.g. gpt-oss `message.thinking`), which is shown to the
-# user but never treated as the final answer.
+# user but never treated as the final answer. `tool_calls` carries native
+# function calls when the model responds via Ollama's `tool_calls` protocol
+# (05.1); text content may be empty when tool_calls is populated.
 struct StreamItem
     text::String
     is_thinking::Bool
+    tool_calls::Vector{Dict{String,Any}}
 end
 
-StreamItem(text::String) = StreamItem(text, false)
+StreamItem(text::String, is_thinking::Bool = false) =
+    StreamItem(text, is_thinking, Dict{String,Any}[])
 
 """
 Test connection to Ollama server
@@ -218,6 +222,7 @@ function query_ollama_chat_stream(
     model::String = MODEL_NAME,
     temperature::Float64 = 0.7,
     max_tokens::Int = 2000,
+    tools::Union{Nothing,Vector} = nothing,
 )
     channel = Channel{StreamItem}(32)
     payload_file = tempname()
@@ -230,6 +235,11 @@ function query_ollama_chat_stream(
             "options" =>
                 Dict("temperature" => temperature, "num_predict" => max_tokens),
         )
+        if tools !== nothing
+            # Native JSON-schema tool calling (05.1).
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        end
 
         write(payload_file, JSON.json(payload))
 
@@ -249,6 +259,36 @@ function query_ollama_chat_stream(
                             t = msg["thinking"]
                             if t isa String && !isempty(t)
                                 put!(channel, StreamItem(t, true))
+                            end
+                        end
+                        # Native tool calls (05.1): {tool_calls: [{function: {name, arguments}}]}
+                        if haskey(msg, "tool_calls")
+                            tc = msg["tool_calls"]
+                            if tc isa Vector && !isempty(tc)
+                                calls = Dict{String,Any}[]
+                                for call in tc
+                                    fn = get(call, "function", nothing)
+                                    if fn !== nothing
+                                        raw_args = get(fn, "arguments", "")
+                                        parsed_args = try
+                                            raw_args isa AbstractDict ? Dict{String,Any}(raw_args) :
+                                            isempty(strip(string(raw_args))) ? Dict{String,Any}() :
+                                            Dict{String,Any}(JSON.parse(string(raw_args)))
+                                        catch
+                                            Dict{String,Any}()
+                                        end
+                                        push!(
+                                            calls,
+                                            Dict{String,Any}(
+                                                "name" => string(get(fn, "name", "")),
+                                                "arguments" => parsed_args,
+                                            ),
+                                        )
+                                    end
+                                end
+                                if !isempty(calls)
+                                    put!(channel, StreamItem("", false, calls))
+                                end
                             end
                         end
                         chunk = get(msg, "content", "")

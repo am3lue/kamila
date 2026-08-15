@@ -32,7 +32,7 @@ export start_mock_server,
     chat_line_thinking,
     generate_line
 
-export last_chat_request
+export last_chat_request, last_chat_has_tools, chat_line_tool_call
 
 mutable struct MockServer
     server::TCPServer
@@ -46,6 +46,7 @@ mutable struct MockServer
     chat_request_count::Base.RefValue{Int}
     chat_scripts::Vector{Vector{String}}  # optional per-request NDJSON scripts
     last_chat_body::Base.RefValue{String} # body of the most recent /api/chat request
+    last_chat_has_tools::Base.RefValue{Bool} # whether the payload included a tools array
 end
 
 """
@@ -88,6 +89,31 @@ function chat_line_thinking(;
 end
 
 """
+Create a canned NDJSON line for /api/chat that includes a native tool call.
+`arguments` is a Dict serialized as the function's arguments string.
+"""
+function chat_line_tool_call(; name::String = "", arguments::Dict = Dict(), done::Bool = true)
+    return JSON.json(
+        Dict(
+            "model" => "kamila1",
+            "message" => Dict(
+                "role" => "assistant",
+                "content" => "",
+                "tool_calls" => [
+                    Dict(
+                        "function" => Dict(
+                            "name" => name,
+                            "arguments" => JSON.json(arguments),
+                        ),
+                    ),
+                ],
+            ),
+            "done" => done,
+        ),
+    )
+end
+
+"""
 Start a mock Ollama server on 127.0.0.1 with an ephemeral port.
 Returns a `MockServer`. Default script: one short /api/chat response.
 """
@@ -109,6 +135,7 @@ function start_mock_server(;
         Ref(0),
         Vector{Vector{String}}(),
         Ref(""),
+        Ref(false),
     )
 
     mock.task = @async begin
@@ -142,6 +169,13 @@ Used to assert on the messages actually sent to the model (e.g. system prompt).
 """
 function last_chat_request(mock::MockServer)
     return mock.last_chat_body[]
+end
+
+"""
+Return whether the most recent /api/chat payload included a `tools` array.
+"""
+function last_chat_has_tools(mock::MockServer)
+    return mock.last_chat_has_tools[]
 end
 
 """
@@ -202,6 +236,13 @@ function handle_connection(mock::MockServer, sock)
             payload = mock.tags_json
         elseif startswith(target, "/api/chat")
             mock.last_chat_body[] = body
+            try
+                parsed = JSON.parse(body)
+                mock.last_chat_has_tools[] = haskey(parsed, "tools") &&
+                                             !isempty(get(parsed, "tools", Any[]))
+            catch
+                mock.last_chat_has_tools[] = false
+            end
             lock(mock.script_lock) do
                 if !isempty(mock.chat_scripts)
                     n = mock.chat_request_count[] + 1

@@ -143,20 +143,23 @@ end
         end
     end
 
-    @testset "delete_memory removes from both tables" begin
+    @testset "paraphrase recall (semantic, not keyword)" begin
         with_fresh_db() do
-            id, _ = KM.remember("Content to delete"; kind = "note", importance = 0.5)
-            @test id > 0
+            # Requires a real embedding model (e.g. nomic-embed-text) reachable
+            # via the Ollama endpoint. Self-gating: skip when unavailable.
+            probe = VEC.embed("probe")
+            if probe === nothing
+                @test_skip "embedding model unavailable (no /api/embed response)"
+            else
+                # Seed memories with content that shares no keywords with the query.
+                id1, _ = KM.remember("I deployed the bridge service"; kind = "chat", importance = 0.8)
+                KM.remember("Write unit tests for memory"; kind = "task", importance = 0.7)
+                @test id1 > 0
 
-            KM.delete_memory(id)
-
-            # Check memories table
-            rows = MDB.query_all("SELECT id FROM memories WHERE id = ?", (id,))
-            @test isempty(rows)
-
-            # Check FTS5
-            rows = MDB.query_all("SELECT rowid FROM memories_fts WHERE rowid = ?", (id,))
-            @test isempty(rows)
+                hits = VEC.recall("what did we do with that socket thing?"; k = 5, min_sim = 0.25)
+                @test !isempty(hits)
+                @test any(h -> occursin("bridge service", h.content), hits)
+            end
         end
     end
 

@@ -8,9 +8,9 @@
 
 ## Sequencing
 
-1. `06.1-proactive-daemon` — a background process/lifetime so Kamila can react to events and schedule things (needs `01.3`, `02`).
-2. `06.2-goal-engine` — goals → decomposed plans → tracked progress (needs `04`, `05.2`, `03`).
-3. `06.3-orchestrator` — bounded autonomous schedules that dispatch plans/daemon tasks (needs `06.1`, `06.2`, `04.2/04.3`, `05.3`).
+1. [x] `06.1-proactive-daemon` — **DONE** (2026-08-15): `Events` bus, `Scheduler` with `scheduled_jobs` (Migration 6), `Daemon.run()` main loop + pid file + graceful shutdown, headless permission resolution, `set_reminder` persisted, bridge→TUI notification forwarding, `--daemon/--daemon-status/--daemon-stop` CLI. Tests: `test/daemon_test.jl` (50). Full suite 4447 pass / 2 broken.
+2. [x] `06.2-goal-engine` — **DONE** (2026-08-15): `goals.plan_id` + `goals.progress` derived cache (Migration 7), `link_goal_plan`/`goal_progress`/gated `complete_goal`, `decompose_goal` retro-decomposition, `goal.progress` events on plan-step verification, bridge `goal.*` routes, `memory_query goals` derived progress. Tests: `test/goal_test.jl` (24). Full suite 4471 pass / 2 broken.
+3. [x] `06.3-orchestrator` — **DONE** (2026-08-15): `module Executive` (work-item collection from plans/jobs/goals, deterministic priority sort, per-day budget ledger persisted in `kv`, propose-vs-execute gate defaulting to propose-only, verify-fail pauses plan via `Plan.pause_on_failure`, interactive preemption, catch-up on boot, auditable debits), daemon `tick_once` integration, bridge `orchestrator.*` routes incl. `orchestrator.pause` kill switch. Tests: `test/executive_test.jl` (60). Full suite 4471+ pass / 2 broken.
 
 ---
 

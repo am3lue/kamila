@@ -177,6 +177,209 @@ end
         @test occursin("Unknown method", events[1]["error"])
     end
 
+    @testset "orchestrator.status / toggle_auto / pause routes" begin
+        # Kill-switch route: turning auto on then pausing must disable execution.
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict(
+                    "type" => "request",
+                    "id" => "os1",
+                    "method" => "orchestrator.toggle_auto",
+                    "params" => Dict("auto_execute" => true),
+                ),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "response"
+        @test events[1]["result"]["auto_execute"] == true
+
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict("type" => "request", "id" => "os2", "method" => "orchestrator.pause", "params" => Dict()),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "response"
+        @test events[1]["result"]["paused"] == true
+
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict("type" => "request", "id" => "os3", "method" => "orchestrator.status", "params" => Dict()),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "response"
+        @test haskey(events[1]["result"], "budget")
+        @test events[1]["result"]["auto_execute"] == false
+        @test events[1]["result"]["interactive"] == false
+
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict(
+                    "type" => "request",
+                    "id" => "os4",
+                    "method" => "orchestrator.advance_now",
+                    "params" => Dict(),
+                ),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "error"
+        @test events[1]["code"] == 400
+        @test occursin("plan_id", events[1]["error"])
+    end
+
+    @testset "experience.reuse / experience.search / experience.export routes" begin
+        # Record an experience row, then exercise the reuse route.
+        Kamila.Experience.record(
+            kind = "tool",
+            prompt = "install python on ubuntu",
+            tool = "run_shell_command",
+            result = "done",
+            verified = true,
+        )
+        Kamila.Experience.count()
+
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict(
+                    "type" => "request",
+                    "id" => "ex1",
+                    "method" => "experience.reuse",
+                    "params" => Dict("description" => "install python"),
+                ),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "response"
+        @test haskey(events[1]["result"], "results")
+        @test haskey(events[1]["result"], "count")
+
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict(
+                    "type" => "request",
+                    "id" => "ex2",
+                    "method" => "experience.search",
+                    "params" => Dict("query" => "install python"),
+                ),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "response"
+        @test haskey(events[1]["result"], "results")
+
+        mktempdir() do dir
+            path = joinpath(dir, "exp.jsonl")
+            out = capture_stdout() do
+                BR.dispatch(
+                    Dict(
+                        "type" => "request",
+                        "id" => "ex3",
+                        "method" => "experience.export",
+                        "params" => Dict("path" => path),
+                    ),
+                )
+            end
+            events = parse_bridge_output(out)
+            @test events[1]["type"] == "response"
+            @test events[1]["result"]["rows"] >= 1
+            @test isfile(path)
+        end
+
+        # Missing params are rejected.
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict(
+                    "type" => "request",
+                    "id" => "ex4",
+                    "method" => "experience.reuse",
+                    "params" => Dict(),
+                ),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "error"
+        @test events[1]["code"] == 400
+        @test occursin("description", events[1]["error"])
+    end
+
+    @testset "feedback.record / preferences routes" begin
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict(
+                    "type" => "request",
+                    "id" => "fb1",
+                    "method" => "feedback.record",
+                    "params" => Dict("key" => "tone", "value" => "concise", "explicit" => true),
+                ),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "response"
+        @test events[1]["result"]["key"] == "tone"
+        @test events[1]["result"]["value"] == "narrated"  # not enough signals yet
+
+        # Missing params rejected.
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict(
+                    "type" => "request",
+                    "id" => "fb2",
+                    "method" => "feedback.record",
+                    "params" => Dict("key" => "tone"),
+                ),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "error"
+        @test events[1]["code"] == 400
+
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict(
+                    "type" => "request",
+                    "id" => "pf1",
+                    "method" => "preferences.get",
+                    "params" => Dict(),
+                ),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "response"
+        @test haskey(events[1]["result"], "preferences")
+        @test haskey(events[1]["result"], "active")
+
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict(
+                    "type" => "request",
+                    "id" => "pf2",
+                    "method" => "preferences.history",
+                    "params" => Dict("key" => "tone"),
+                ),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "response"
+        @test length(events[1]["result"]["events"]) >= 1
+
+        # Revert (no-op-safe even without a committed value).
+        out = capture_stdout() do
+            BR.dispatch(
+                Dict(
+                    "type" => "request",
+                    "id" => "pf3",
+                    "method" => "preferences.revert",
+                    "params" => Dict("key" => "tone"),
+                ),
+            )
+        end
+        events = parse_bridge_output(out)
+        @test events[1]["type"] == "response"
+        @test events[1]["result"]["restored"] == "narrated"
+    end
+
     @testset "tasks.add / tasks.list / tasks.complete / tasks.delete" begin
         reset_memory_file!(TEST_SANDBOX[]["memory_file"])
         out = capture_stdout() do
@@ -933,5 +1136,134 @@ end
         @test haskey(lat_resp[1]["result"], "internet_ms")
         @test lat_resp[1]["result"]["internet_ms"] === nothing ||
               lat_resp[1]["result"]["internet_ms"] isa Number
+    end
+
+    @testset "plan.create / plan.list / plan.status / plan.cancel / plan.resume" begin
+        old_db = get(ENV, "KAMILA_DB", nothing)
+        ENV["KAMILA_DB"] = ":memory:"
+        try
+            Kamila.MemoryDB.reset!()
+
+            out = capture_stdout() do
+                BR.dispatch(
+                    Dict(
+                        "type" => "request",
+                        "id" => "p1",
+                        "method" => "plan.create",
+                        "params" => Dict(
+                            "goal" => "deploy the service",
+                            "session" => "default",
+                            "steps" => [
+                                Dict("description" => "build", "depends_on" => Int[], "tool" => "run_shell_command", "args" => Dict("command" => "true")),
+                                Dict("description" => "test", "depends_on" => Int[1], "tool" => "run_shell_command", "args" => Dict("command" => "true")),
+                            ],
+                        ),
+                    ),
+                )
+            end
+            events = parse_bridge_output(out)
+            @test events[1]["type"] == "response"
+            plan_id = events[1]["result"]["id"]
+            @test events[1]["result"]["status"] == "created"
+            @test events[1]["result"]["step_count"] == 2
+
+            out = capture_stdout() do
+                BR.dispatch(
+                    Dict(
+                        "type" => "request",
+                        "id" => "p2",
+                        "method" => "plan.list",
+                        "params" => Dict(),
+                    ),
+                )
+            end
+            events = parse_bridge_output(out)
+            @test events[1]["type"] == "response"
+            @test length(events[1]["result"]) == 1
+            @test events[1]["result"][1]["id"] == plan_id
+
+            out = capture_stdout() do
+                BR.dispatch(
+                    Dict(
+                        "type" => "request",
+                        "id" => "p3",
+                        "method" => "plan.status",
+                        "params" => Dict("id" => plan_id),
+                    ),
+                )
+            end
+            events = parse_bridge_output(out)
+            @test events[1]["type"] == "response"
+            @test events[1]["result"]["status"] == "created"
+            @test length(events[1]["result"]["steps"]) == 2
+            @test events[1]["result"]["steps"][1]["status"] == "pending"
+
+            out = capture_stdout() do
+                BR.dispatch(
+                    Dict(
+                        "type" => "request",
+                        "id" => "p4",
+                        "method" => "plan.resume",
+                        "params" => Dict("id" => plan_id),
+                    ),
+                )
+            end
+            events = parse_bridge_output(out)
+            @test events[1]["type"] == "response"
+            @test events[1]["result"]["status"] == "active"
+
+            out = capture_stdout() do
+                BR.dispatch(
+                    Dict(
+                        "type" => "request",
+                        "id" => "p5",
+                        "method" => "plan.cancel",
+                        "params" => Dict("id" => plan_id),
+                    ),
+                )
+            end
+            events = parse_bridge_output(out)
+            @test events[1]["type"] == "response"
+            @test events[1]["result"]["status"] == "cancelled"
+
+            # Unknown plan -> 404 error, not a crash.
+            out = capture_stdout() do
+                BR.dispatch(
+                    Dict(
+                        "type" => "request",
+                        "id" => "p6",
+                        "method" => "plan.status",
+                        "params" => Dict("id" => "nope"),
+                    ),
+                )
+            end
+            events = parse_bridge_output(out)
+            @test events[1]["type"] == "error"
+            @test events[1]["code"] == 404
+
+            # Invalid plan (cycle) -> 400 error.
+            out = capture_stdout() do
+                BR.dispatch(
+                    Dict(
+                        "type" => "request",
+                        "id" => "p7",
+                        "method" => "plan.create",
+                        "params" => Dict(
+                            "goal" => "bad",
+                            "steps" => [
+                                Dict("description" => "a", "depends_on" => Int[2], "tool" => "", "args" => Dict()),
+                                Dict("description" => "b", "depends_on" => Int[1], "tool" => "", "args" => Dict()),
+                            ],
+                        ),
+                    ),
+                )
+            end
+            events = parse_bridge_output(out)
+            @test events[1]["type"] == "error"
+            @test events[1]["code"] == 400
+        finally
+            Kamila.MemoryDB.reset!()
+            old_db === nothing ? delete!(ENV, "KAMILA_DB") : ENV["KAMILA_DB"] = old_db
+        end
     end
 end

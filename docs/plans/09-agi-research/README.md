@@ -14,9 +14,9 @@ The three research threads map to the gaps identified in `../AGI_ASSESSMENT.md`:
 
 ## Sequencing & status
 
-1. `09.1-world-model` — notes + optional prototype (low resource).
-2. `09.2-continual-learning` — depends on `07.2` fine-tuning substrate.
-3. `09.3-intrinsic-motivation` — depends on `06-autonomy` operating safely.
+1. `09.1-world-model` — **prototype**: exact-key outcome predictor over the `07.1` experience store + held-out eval harness (`src/research/outcome_predictor.jl`, `test/outcome_predictor_test.jl`). Honest status: scaffolding validated (22 tests); go/no-go **not yet decided** — the production DB currently holds 0 experience rows, so the "beats random by >20pts / false-veto <2%" rubric cannot be measured yet. Seam is ready for real data.
+2. `09.2-continual-learning` — **prototype (scaffolding only)**: `longitudinal_split` in `src/learning/eval.jl` measures per-skill regression holds GPU-free via the injected runner (`test/eval_test.jl`). Real LoRA runs need a GPU (07.2 substrate); **not yet run** — honest status.
+3. `09.3-intrinsic-motivation` — **prototype**: curiosity novelty tie-breaker in `Orchestrator.Executive` (`novelty_score`, `set_curiosity!`; off by default, only reorders already-planned work). `test/executive_test.jl`. Go/no-go needs a real 2-week A/B; **not yet decided**.
 
 ---
 

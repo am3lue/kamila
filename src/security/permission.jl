@@ -29,6 +29,7 @@ using SHA
 using Dates
 using ..KamilaLog
 using ..Errors
+using ..Capability
 
 export evaluate,
     get_policy,
@@ -41,7 +42,9 @@ export evaluate,
     clear_session_cache,
     clear_policy_cache,
     POLICY_FILE,
-    starter_policy
+    starter_policy,
+    granted_cap,
+    issue_ask_token
 
 # ─── Policy file ───────────────────────────────────────────
 
@@ -86,8 +89,23 @@ function starter_policy()
                 "action" => "ask",
                 "scope" => "tool",
             ),
+            # Informational desktop notifications (06.1 daemon reminders) never
+            # modify state; allow headless so the daemon can fire them without
+            # a TTY confirmation.
+            Dict{String,Any}(
+                "tool" => "set_reminder",
+                "match" => "*",
+                "action" => "allow",
+                "scope" => "tool",
+            ),
         ],
         "default_action" => "ask",
+        "default_capabilities" => [
+            "memory.read",
+            "tasks.read",
+            "system.read",
+            "files.read",
+        ],
         "session_remember" => true,
         "max_asks_per_session" => 20,
     )
@@ -254,6 +272,14 @@ Does `rule` apply to `tool` and `args`? `scope`:
 """
 function _rule_applies(rule::AbstractDict, tool::String, target::String)
     rule_tool = get(rule, "tool", "*")
+    # 05.3: capability-targeted rules. A rule may gate a whole capability
+    # (`cap:network`) or a named skill (`skill:<name>`) rather than one tool.
+    if startswith(string(rule_tool), "cap:")
+        cap = string(rule_tool)[5:end]
+        return Capability.tool_capability(tool) == cap
+    elseif startswith(string(rule_tool), "skill:")
+        return tool == string(rule_tool)[7:end]
+    end
     if rule_tool != "*" && rule_tool != tool
         return false
     end
@@ -332,6 +358,16 @@ function _evaluate_with_rule(tool::String, args)
             break
         end
     end
+    # 05.3: capability grants. A tool whose capability is in `default_capabilities`
+    # is allowed unless an explicit rule already decided otherwise (a deny rule
+    # always wins — belt-and-suspenders, see Capability).
+    if rule_hit == "default"
+        caps = get(policy, "default_capabilities", Any[])
+        if Capability.tool_capability(tool) in caps
+            decision = :allow
+            rule_hit = "default_capabilities"
+        end
+    end
     _audit(tool, decision, rule_hit; target = target)
     return (decision, rule_hit)
 end
@@ -371,6 +407,40 @@ function _constant_time_eq(a::AbstractString, b::AbstractString)
         diff |= Int(ca) ⊻ Int(cb)
     end
     return diff == 0
+end
+
+# ─── Capability grants (05.3) ─────────────────────────────
+
+"""
+True when capability `cap` is granted by the policy: either listed in the
+policy's `default_capabilities`, or allowed by an explicit `cap:<cap>` rule.
+Used to gate enabling skills that declare `required_capabilities`.
+"""
+function granted_cap(cap::AbstractString)
+    cap = string(cap)
+    policy = get_policy()
+    defaults = get(policy, "default_capabilities", Any[])
+    if cap in defaults
+        return true
+    end
+    for rule in get(policy, "rules", Any[])
+        if string(get(rule, "tool", "")) == "cap:$cap" &&
+           string(get(rule, "action", "")) == "allow"
+            return true
+        end
+    end
+    return false
+end
+
+"""
+Issue a short-lived capability token (`TTL=60s`) after an `:ask` decision, so a
+multi-call batch doesn't re-prompt for identical calls. Returns `""` when the
+policy would not allow the action.
+"""
+function issue_ask_token(tool::String, args; ttl::Real = 60)
+    decision, rule = _evaluate_with_rule(tool, args)
+    decision == :allow || return ""
+    return Capability.mint_capability(tool, args; ttl = ttl, action = "allow")
 end
 
 end # module Permission
