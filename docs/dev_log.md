@@ -114,3 +114,33 @@ resolve later and mutate UI state from beyond the grave.
   exit / stops bridge / sets `_voiceCancelled`; `_cancelVoiceRecord` sets the
   gating flag + refocuses; idle paths still quit; `quitApp` cancels when
   recording and quits when idle. 5/5 pass.
+
+### Post-review hardening (independent code review → H1 + W1)
+A standalone code review (full 54-file scope vs `origin/Agent0.2`) found no
+CRITICAL issues and approved, recommending two pre-merge fixes which were applied:
+
+- **H1 (high) — tool-arg content was persisted at `info`** (`src/bridge.jl`):
+  `ai tool call` / `ai agent tool call` logged up to 200 chars of tool
+  arguments (shell commands, file writes) to `~/.kamila/logs/kamila.log` at the
+  default `info` level, contradicting the opt-in-verbose intent. Split each call
+  into `info` metadata (`name`, `args_len`) + a `debug`-only `ai tool call args`
+  payload. Verified: bridge suite 154/154 green; the `info` line now reads
+  `name=run_shell_command args_len=53` with no content.
+- **W1 (warning) — link/image url terminal-tag injection** (`MessageRenderer.js`):
+  `renderToken` concatenated `token.href` and image `text`/`href` without
+  `escapeBraces`, so `[x](a{red-fg}hi{/})` could inject blessed style tags into
+  the terminal string. Escaped all three. Terminal-only impact (cosmetic), not
+  RCE — hence warning, not critical.
+
+Also noted (not fixed this round): policy file at `~/.kamila_policy.json` sits
+outside the guarded `~/.kamila/config` (0700) — migrate candidate W3; `npm run
+lint` is warning-only (43 unused imports) and not wired into CI (S5/S6);
+duplicate-column migration warnings spam stderr on cold start (S4).
+
+### Pattern reaffirmed (from review)
+- **Secrets/log hygiene asymmetry**: a security blocker was a *logging
+  default*, not a runtime bug — the reviewer found values persisted at `info`
+  that the code comments claimed were debug-gated. General rule: when a
+  sensitive field appears in any log call, treat its *level* as a
+  security-relevant decision; don't assume `info` is safe just because it's
+  the "common" level. Keep payload content at `debug` and metadata at `info`.
