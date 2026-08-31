@@ -55,9 +55,9 @@ function renderToken(token) {
     case 'list':
       return renderList(token, 0);
     case 'link':
-      return `${token.tokens.map(renderToken).join('')}{#a8a8a8-fg} (${token.href}){/}`;
+      return `${token.tokens.map(renderToken).join('')}{#a8a8a8-fg} (${escapeBraces(token.href)}){/}`;
     case 'image':
-      return `{#a8a8a8-fg}[img: ${token.text}]${token.href ? ' (' + token.href + ')' : ''}{/}`;
+      return `{#a8a8a8-fg}[img: ${escapeBraces(token.text)}]${token.href ? ' (' + escapeBraces(token.href) + ')' : ''}{/}`;
     case 'blockquote': {
       const content = token.tokens.map(renderToken).join('').trim();
       if (!content) return '';

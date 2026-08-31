@@ -498,8 +498,16 @@ function handle_ai_query(id::String, params::AbstractDict)
                 args_str = string(tool_args)
                 args_len = length(args_str)
                 args_log = args_len > 200 ? args_str[1:200] * "… (truncated)" : args_str
+                # Metadata at info; the actual args may contain sensitive content
+                # (shell commands, file writes) and only belong on disk at debug.
                 KamilaLog.info(
                     "ai tool call";
+                    mod = "ai",
+                    kind = "tool",
+                    fields = Dict("name" => tool_name, "args_len" => args_len),
+                )
+                KamilaLog.debug(
+                    "ai tool call args";
                     mod = "ai",
                     kind = "tool",
                     fields = Dict("name" => tool_name, "args_len" => args_len, "args" => args_log),
@@ -641,7 +649,9 @@ function handle_ai_agent_query(id::String, params::AbstractDict)
                 args_str = string(event.args)
                 args_len = length(args_str)
                 args_log = args_len > 200 ? args_str[1:200] * "… (truncated)" : args_str
-                KamilaLog.info("ai agent tool call"; mod = "ai", kind = "tool", fields = Dict("name" => event.name, "args_len" => args_len, "args" => args_log))
+                # Metadata at info; args content only at debug (may hold secrets).
+                KamilaLog.info("ai agent tool call"; mod = "ai", kind = "tool", fields = Dict("name" => event.name, "args_len" => args_len))
+                KamilaLog.debug("ai agent tool call args"; mod = "ai", kind = "tool", fields = Dict("name" => event.name, "args_len" => args_len, "args" => args_log))
                 write_json(
                     Dict(
                         "type" => "tool_call",
