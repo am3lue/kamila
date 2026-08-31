@@ -55,3 +55,62 @@ Origin: TUI + Julia bridge · Kind: ui/input · Level: critical
   log panel (F10) colors by level, shows `[level][origin:kind]`, and filters
   by level; every entry is also appended to `~/.kamila/logs/tui.log` (JSONL).
 - New `docs/dev_log.md` (this file) for per-session development review.
+
+## Session 2026-08-31 — Input-section audit: voice-record Esc/quit guard
+
+Origin: TUI · Kind: ui/input · Level: high
+
+### Fixed — Esc / quit during voice recording (origin: tui, kind: ui, level: high)
+Audited the input section (`ChatInput.js`, `Keybindings.js`, `KamilaApp.js`
+`_onInputKeyPress` / `_dismissOverlays` / `quitApp` / `app.quit` routing).
+Confirmed a latent HIGH bug the earlier verbose TUI review had flagged but
+never fixed: `_dismissOverlays()` (bound to `Esc` twice — via the
+`overlay.dismiss` action and directly via `screen.key(['escape'], …)`) called
+`process.exit(0)` without checking `uiState.voiceRecording`. So pressing Esc
+mid-capture — which `VoiceIndicator` renders as `[Esc] Cancel` and the input
+hint promises ("Recording... Press Esc to cancel") — actually killed the whole
+app and abandoned the in-flight `Bridge.audio.record` promise, which would then
+resolve later and mutate UI state from beyond the grave.
+
+- `_dismissOverlays`: if `voiceRecording`, call new `_cancelVoiceRecord()` and
+  return instead of exiting.
+- `quitApp()` + the `app.quit` C-c binding now route through the same guard
+  (previously the binding inlined `bridge.stop(); process.exit(0)`).
+- New `_cancelVoiceRecord()`: sets `_voiceCancelled`, stops/cancels the
+  `VoiceIndicator`, clears the input hint, appends a cancel notice, refocuses
+  the input, re-renders.
+- `_startVoiceRecord`: resets `_voiceCancelled = false`; both the `.then`
+  and `.catch` of `Bridge.audio.record` early-return when `_voiceCancelled`,
+  so a late-recording resolution after a cancel can no longer overwrite the
+  input value / append a draft while the user has moved on.
+- `tui.log` path: `tuiLogDir` now always includes the `logs` segment even when
+  `KAMILA_HOME` is set (previously `KAMILA_HOME` branch dropped it, landing the
+  file at `~/.kamila/tui.log` instead of `~/.kamila/logs/tui.log`).
+
+### Extracted patterns (for skill/rule updates)
+1. **Keybinding-dismiss vs long-running operation**: a global "dismiss"
+   binding (Esc) that falls through to a quit path must be a *gated escape
+   hatch*, not an unconditional exit. Any key that can kill the process must
+   first consult the currently active blocking mode (e.g. voiceRecording) and
+   cancel that mode instead of exiting. Rule: `process.exit` is never reached
+   from a key handler without a positive "nothing in-flight / idle" check.
+2. **Late-result poisoning of async UI**: when a long-running bridge call
+   (`record`) outlives its UI intent (user hit Esc cancel), the resolving
+   promise must not write back to state/input. Introduce a monotonic cancel
+   flag (`_voiceCancelled`) reset at start and checked at both `.then` and
+   `.catch`; never guard only one branch.
+3. **Single source for process teardown**: route every quit path (`app.quit`
+   binding, `quitApp()`, `_dismissOverlays` fallthrough) through one guarded
+   method so a future mode (recording, unsaved draft, running task) only needs
+   one guard to be updated. Inlining `process.exit` in the binding was the
+   defect — an inline teardown can't be mode-aware.
+4. **Env-var path composition**: when building a log/config dir from
+   `process.env.KAMILA_HOME || default`, always append the subdir with
+   `path.join(..., 'logs')` unconditionally — don't expect the env var to carry
+   it. The fallback had `'logs'`; the env branch silently didn't.
+
+### Tests added
+- `tui-v2/test/unit/voiceCancel.test.js` (node:test): Esc-cancel does not
+  exit / stops bridge / sets `_voiceCancelled`; `_cancelVoiceRecord` sets the
+  gating flag + refocuses; idle paths still quit; `quitApp` cancels when
+  recording and quits when idle. 5/5 pass.
