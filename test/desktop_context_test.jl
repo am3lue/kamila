@@ -66,6 +66,34 @@ end
         )
     end
 
+    @testset "active window via mocked kdotool (KDE Plasma Wayland)" begin
+        fake = write_script("fake_kdotool.sh", "#!/bin/sh\necho 'Konsole — KDE'\n")
+        with_env(
+            Dict(
+                "KAMILA_DESKTOP_SESSION" => "wayland",
+                "KAMILA_DESKTOP_KDE" => "1",
+                "KAMILA_ACTIVE_WINDOW_CMD" => fake,
+            ),
+            () -> begin
+                @test DC.active_window_title() == "Konsole — KDE"
+            end,
+        )
+    end
+
+    @testset "clipboard via mocked klipper (KDE Plasma Wayland)" begin
+        fake = write_script("fake_qdbus.sh", "#!/bin/sh\necho 'clip from klipper'\n")
+        with_env(
+            Dict(
+                "KAMILA_DESKTOP_SESSION" => "wayland",
+                "KAMILA_DESKTOP_KDE" => "1",
+                "KAMILA_CLIPBOARD_CMD" => fake,
+            ),
+            () -> begin
+                @test DC.clipboard_text() == "clip from klipper"
+            end,
+        )
+    end
+
     @testset "active window via mocked swaymsg (Wayland)" begin
         fake = write_script(
             "fake_swaymsg.sh",
@@ -73,7 +101,11 @@ end
             "{\"nodes\":[{\"focused\":false,\"name\":\"Output\",\"nodes\":[{\"focused\":true,\"name\":\"Editor\"}]}]}\nEOF\n",
         )
         with_env(
-            Dict("KAMILA_DESKTOP_SESSION" => "wayland", "KAMILA_ACTIVE_WINDOW_CMD" => fake),
+            Dict(
+                "KAMILA_DESKTOP_SESSION" => "wayland",
+                "KAMILA_DESKTOP_KDE" => "0",
+                "KAMILA_ACTIVE_WINDOW_CMD" => fake,
+            ),
             () -> begin
                 @test DC.active_window_title() == "Editor"
             end,
@@ -82,7 +114,11 @@ end
 
     @testset "missing tools degrade gracefully, never crash" begin
         with_env(
-            Dict("KAMILA_DESKTOP_SESSION" => "wayland", "KAMILA_ACTIVE_WINDOW_CMD" => nothing),
+            Dict(
+                "KAMILA_DESKTOP_SESSION" => "wayland",
+                "KAMILA_DESKTOP_KDE" => "0",
+                "KAMILA_ACTIVE_WINDOW_CMD" => nothing,
+            ),
             () -> begin
                 # swaymsg isn't on this test host → nothing, not an exception.
                 @test DC.active_window_title() === nothing

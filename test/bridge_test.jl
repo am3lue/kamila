@@ -139,12 +139,13 @@ end
                 @test haskey(d, "type")
             end
 
-            # stderr: JSON log lines with level/module/msg fields.
+            # stderr: JSON log lines with level/origin/kind/msg fields.
             log_lines = filter(l -> startswith(l, "{"), split(stderr_str, "\n"))
             @test !isempty(log_lines)
             sample = JSON.parse(log_lines[1])
             @test haskey(sample, "level")
-            @test haskey(sample, "module")
+            @test haskey(sample, "origin")
+            @test haskey(sample, "kind")
             @test haskey(sample, "msg")
         finally
             Kamila.KamilaLog.set_json_format(false)

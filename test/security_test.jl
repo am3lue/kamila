@@ -44,6 +44,29 @@ const OSCheck = Kamila.OSCheck
         distro = OSCheck.get_linux_distro()
         @test distro != ""
         @test OSCheck.enforce_platform_restriction() === nothing
+
+        # 08.4 Arch restriction: off by default → true on any Linux. Uses the
+        # pure `arch_restriction_check` with the KAMILA_FORCE_ARCH override so
+        # it is deterministic on any host and never calls exit(1) in tests.
+        @test OSCheck.arch_restriction_mode() == :off
+        with_env(Dict("KAMILA_ARCH_RESTRICT" => "off", "KAMILA_FORCE_ARCH" => "false"), () -> begin
+            @test OSCheck.arch_restriction_check() == :ok
+            @test OSCheck.verify_arch_restriction() == true
+        end)
+        with_env(Dict("KAMILA_ARCH_RESTRICT" => "warn", "KAMILA_FORCE_ARCH" => "false"), () -> begin
+            @test OSCheck.arch_restriction_mode() == :warn
+            @test OSCheck.arch_restriction_check() == :warn
+            @test OSCheck.verify_arch_restriction() == false
+        end)
+        with_env(Dict("KAMILA_ARCH_RESTRICT" => "strict", "KAMILA_FORCE_ARCH" => "false"), () -> begin
+            @test OSCheck.arch_restriction_mode() == :strict
+            @test OSCheck.arch_restriction_check() == :block
+        end)
+        # On Arch (forced), every mode allows running.
+        with_env(Dict("KAMILA_FORCE_ARCH" => "true"), () -> begin
+            @test OSCheck.arch_restriction_check() == :ok
+            @test OSCheck.verify_arch_restriction() == true
+        end)
     end
 
     @testset "FileAccess is_path_allowed" begin

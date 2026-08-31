@@ -105,6 +105,11 @@ function main()
         exit(1)
     end
 
+    # 08.4: Optional non-Arch restriction. `off` by default; `strict` refuses
+    # to run on non-Arch systems, `warn` logs a warning. Arch users are
+    # unaffected. Env: KAMILA_ARCH_RESTRICT=off|warn|strict
+    OSCheck.verify_arch_restriction()
+
     KamilaMemory.initialize_memory()
     Permission.ensure_policy_file()
     SystemMonitor.prime_cpu_baseline()

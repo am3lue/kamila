@@ -10,13 +10,36 @@ cd "$PROJECT_DIR"
 
 export JULIA_PROJECT="$PROJECT_DIR"
 
-# Default log file under the XDG state dir; respects KAMILA_LOG_FILE override.
+# Default log file under the config home (~/.kamila/logs); respects KAMILA_LOG_FILE override.
 setup_logging() {
     if [ -z "${KAMILA_LOG_FILE:-}" ]; then
-        LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/kamila"
+        LOG_DIR="$HOME/.kamila/logs"
         mkdir -p "$LOG_DIR"
         export KAMILA_LOG_FILE="$LOG_DIR/kamila.log"
     fi
+    # Default to info (not debug) so sensitive request/response content is not
+    # persisted to disk unless the user explicitly opts in via KAMILA_VERBOSE=1.
+    export KAMILA_LOG="${KAMILA_LOG:-info}"
+    if [ "${KAMILA_VERBOSE:-0}" = "1" ]; then
+        export KAMILA_LOG=debug
+        export KAMILA_LOG_FORMAT=json
+    fi
+    return 0
+}
+
+# Central config home under ~/.kamila so user data is reachable and
+# protected in one place (0700) instead of scattered dotfiles. All Kamila
+# config paths are redirected here; env overrides still take precedence.
+setup_config_home() {
+    export KAMILA_HOME="${KAMILA_HOME:-$HOME/.kamila}"
+    mkdir -p "$KAMILA_HOME" "$KAMILA_HOME/bin" "$KAMILA_HOME/config" "$KAMILA_HOME/state" "$KAMILA_HOME/logs"
+    chmod 700 "$KAMILA_HOME" 2>/dev/null || true
+
+    export KAMILA_CONFIG_FILE="${KAMILA_CONFIG_FILE:-$KAMILA_HOME/config/config.json}"
+    export KAMILA_MEMORY_FILE="${KAMILA_MEMORY_FILE:-$KAMILA_HOME/config/memory.json}"
+    export KAMILA_CHAT_HISTORY_FILE="${KAMILA_CHAT_HISTORY_FILE:-$KAMILA_HOME/config/chat_history.json}"
+    export KAMILA_MODELS_CONFIG="${KAMILA_MODELS_CONFIG:-$KAMILA_HOME/config/models.json}"
+    export XDG_STATE_HOME="${XDG_STATE_HOME:-$KAMILA_HOME/state}"
     return 0
 }
 
@@ -32,10 +55,19 @@ show_help() {
     echo "  --daemon          Start the background proactive daemon"
     echo "  --daemon-status   Show daemon status (pid file)"
     echo "  --daemon-stop     Send SIGTERM to a running daemon"
-    echo "  --setup           Run initial setup"
+    echo "  --tui=v1|v2       Select TUI version (default: v2)"
+    echo "  --setup           Run initial setup (deps, models, config home, launcher link)"
+    echo "  --verbose         Emit structured JSON logs (KAMILA_LOG_FORMAT=json)"
+    echo ""
+    echo "Logging: info is on by default (see ~/.kamila/logs/kamila.log)."
+    echo "  Set KAMILA_LOG=debug|warn|error, or KAMILA_VERBOSE=1 for verbose JSON logs."
+    echo "  KAMILA_ARCH_RESTRICT=strict|warn|off controls the Arch-only gate (default: off)."
     echo ""
     echo "Examples:"
-    echo "  $0                Launch Kamila TUI"
+    echo "  $0                Launch Kamila TUI (v2)"
+    echo "  $0 --tui=v1       Launch legacy TUI"
+    echo "  $0 --tui=v2       Launch new TUI"
+    echo "  $0 --verbose      Launch with JSON structured logs"
     echo "  $0 --setup        Run setup"
 }
 
@@ -48,14 +80,34 @@ show_version() {
 run_setup() {
     echo "Kamila setup..."
 
+    echo "Setting up config home (~/.kamila)..."
+    setup_config_home
+
     echo "Installing Julia packages..."
     julia --project="$PROJECT_DIR" -e "using Pkg; Pkg.instantiate(); Pkg.precompile()"
 
-    echo "Installing Node.js TUI dependencies..."
+    echo "Installing Node.js TUI v1 dependencies..."
     if command -v node &> /dev/null; then
         (cd "$PROJECT_DIR/tui" && npm install)
     else
         echo "Node.js not found. Install from https://nodejs.org/"
+    fi
+
+    echo "Installing Node.js TUI v2 dependencies..."
+    if command -v node &> /dev/null; then
+        (cd "$PROJECT_DIR/tui-v2" && npm install)
+    else
+        echo "Node.js not found. Install from https://nodejs.org/"
+    fi
+
+    echo "Installing launcher (kamila -> PATH)..."
+    if command -v ln &> /dev/null; then
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$SCRIPT_DIR/kamila" "$HOME/.local/bin/kamila"
+        echo "Linked: $HOME/.local/bin/kamila -> $SCRIPT_DIR/kamila"
+        echo "TIP: add '$HOME/.local/bin' to your PATH if 'kamila' is not found."
+    else
+        echo "ln not found — skipping launcher link."
     fi
 
     if command -v ollama &> /dev/null; then
@@ -74,10 +126,14 @@ run_setup() {
         echo "Ollama not found. AI features limited."
     fi
 
+    echo ""
     echo "Setup complete."
+    echo "Config home: $KAMILA_HOME (0700)"
+    echo "Run 'kamila' to launch the TUI."
 }
 
 launch_tui() {
+    setup_config_home
     setup_logging
     if ! command -v node &> /dev/null; then
         echo "Node.js not found. Install from https://nodejs.org/"
@@ -86,18 +142,37 @@ launch_tui() {
         exit $?
     fi
 
-    if [ ! -d "tui/node_modules" ]; then
-        echo "TUI dependencies not installed. Running npm install..."
-        (cd tui && npm install) || {
+    local tui_dir="tui"
+    local entry="index.js"
+    if [ "${TUI_VERSION:-v2}" = "v2" ]; then
+        tui_dir="tui-v2"
+        entry="src/index.js"
+    fi
+
+    if [ ! -d "$tui_dir/node_modules" ]; then
+        echo "TUI ($tui_dir) dependencies not installed. Running npm install..."
+        (cd "$tui_dir" && npm install) || {
             echo "npm install failed. Falling back to Julia bridge mode..."
             julia --project="$PROJECT_DIR" -e "include(\"src/Kamila.jl\"); using .Kamila; Kamila.KamilaBridge.run_bridge(; read_timeout=86400.0)"
             exit $?
         }
     fi
 
-    TERM=xterm-256color node tui/index.js 2>/dev/null
+    TERM=xterm-256color node "$tui_dir/$entry" 2>"$KAMILA_HOME/logs/tui-stderr.log"
     exit $?
 }
+
+# --verbose may appear anywhere; strip it so the dispatcher below sees a
+# clean first argument.
+REST_ARGS=()
+for arg in "$@"; do
+    if [ "$arg" = "--verbose" ]; then
+        export KAMILA_VERBOSE=1
+    else
+        REST_ARGS+=("$arg")
+    fi
+done
+set -- "${REST_ARGS[@]}"
 
 case "${1:-}" in
     --help|-h)
@@ -109,32 +184,47 @@ case "${1:-}" in
         exit 0
         ;;
     --setup)
+        shift
         run_setup
         exit 0
         ;;
     --bridge)
         shift
+        setup_config_home
         setup_logging
         julia --project="$PROJECT_DIR" -e "include(\"src/Kamila.jl\"); using .Kamila; Kamila.KamilaBridge.run_bridge(; read_timeout=86400.0)"
         exit $?
         ;;
     --daemon)
         shift
+        setup_config_home
         setup_logging
         julia --project="$PROJECT_DIR" src/Kamila.jl --daemon
         exit $?
         ;;
     --daemon-status)
         shift
+        setup_config_home
         setup_logging
         julia --project="$PROJECT_DIR" src/Kamila.jl --daemon-status
         exit $?
         ;;
     --daemon-stop)
         shift
+        setup_config_home
         setup_logging
         julia --project="$PROJECT_DIR" src/Kamila.jl --daemon-stop
         exit $?
+        ;;
+    --tui=v1)
+        export TUI_VERSION=v1
+        shift
+        launch_tui
+        ;;
+    --tui=v2)
+        export TUI_VERSION=v2
+        shift
+        launch_tui
         ;;
     "")
         launch_tui

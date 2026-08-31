@@ -25,6 +25,10 @@ fi
 if command -v node &> /dev/null; then
     echo "Installing TUI dependencies..."
     (cd tui && npm install)
+    if [ -d "tui-v2" ]; then
+        echo "Installing TUI v2 dependencies..."
+        (cd tui-v2 && npm install)
+    fi
 else
     echo "Node.js not found. TUI will not work."
     echo "Install from https://nodejs.org/"
@@ -53,6 +57,18 @@ else
 fi
 
 chmod +x bin/kamila
+
+echo "Checking desktop-context dependencies..."
+echo "  - Desktop context reads the active window + clipboard (Wayland/X11)."
+echo "  - X11: xsel recommended. Wayland: depends on your compositor."
+echo "  - KDE Plasma: qdbus6/qdbus + klipper (clipboard); kdotool recommended for active window (falls back to KWin scripting via qdbus + journalctl)."
+echo "  - Sway: swaymsg + wl-paste + jq."
+if command -v xsel &> /dev/null; then echo "  [ok] xsel"; else echo "  [warn] xsel not found (X11 clipboard)"; fi
+if command -v qdbus6 &> /dev/null || command -v qdbus &> /dev/null; then echo "  [ok] qdbus (KDE D-Bus)"; else echo "  [warn] qdbus not found (KDE desktop context)"; fi
+if command -v kdotool &> /dev/null; then echo "  [ok] kdotool (KDE active window)"; else echo "  [warn] kdotool not found (falls back to KWin scripting)"; fi
+
+echo "Verifying platform restriction..."
+echo "  - Set KAMILA_ARCH_RESTRICT=strict to hard-require Arch Linux (exit if not), warn to print a warning, or off (default) to allow any distro."
 
 echo "Creating system-wide symlink..."
 if [ -L "/usr/local/bin/kamila" ]; then

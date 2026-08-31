@@ -291,3 +291,48 @@ The architecture supports easy extension for:
 **Implementation Status: COMPLETE ✅**  
 **Ready for Deployment and Usage**  
 **Kamila v0.1.0 - Personal Terminal Assistant**
+
+---
+
+## Session Log (Agent0.2 — UI/UX v2 fixes + KDE Wayland)
+
+_Logged for later setup reference. Date: 2026-08-17._
+
+### Desktop Context — KDE Plasma Wayland (src/system/desktop_context.jl)
+- `_is_kde_plasma()`: detects KDE via env (XDG_CURRENT_DESKTOP/XDG_SESSION_TYPE/KDE_FULL_SESSION). Override with `KAMILA_DESKTOP_KDE=1|0`.
+- `_find_qdbus()`: prefers `qdbus6`, falls back to `qdbus`.
+- `_kde_active_window()`: tries `kdotool` (optional) first; falls back to KWin scripting: `qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript <tmpfile>` → `/Scripting/Script{id} org.kde.kwin.Script.run` → parse `journalctl _COMM=kwin_wayland` for `KAMILA_ACTIVE=` marker → `org.kde.kwin.Script.stop` + unload. (Plain loadScript+start is broken on Plasma 6.7; Script{id}.run works. AT-SPI and queryWindowInfo are unreliable here.)
+- `_kde_clipboard()`: `qdbus org.kde.klipper /klipper org.kde.klipper.klipper.getClipboardContents` (full interface method name required).
+- X11: xsel fallback. Tests in `test/desktop_context_test.jl` force `KAMILA_DESKTOP_KDE=0` on the KDE host.
+- Live-verified on this machine (kernel 7.1.6-zen1-1-zen, Plasma 6.7.4).
+
+### TUI v2 (tui-v2/)
+- `KamilaApp.refreshGauges`: sets header uptime (`sys.uptime.formatted`), left sidebar CPU/RAM gauges, right sidebar stats.
+- LeftSidebar/RightSidebar/ChatLog: `onResize` repositions boxes via RegionManager regions.
+- Mouse: click handlers bound in `_createComponents`; `LeftSidebar.handleClick` opens task action (guard line 4, not 5); `RightSidebar.handleClick` toggles WATCH.
+- `_togglePanels`: responsive widths ('22%'/'18%' ↔ 0, minWidth 0) + box show/hide.
+- RightSidebar stats now use `mem.used_gb ?? '?'` and network delta speeds (B/s).
+- RegionManager: `calculate()` now invalidates on definition version change (not just resize) — fixes stale regions after `_togglePanels` redefines.
+- Fixed `TaskActionOverlay` require in `KamilaApp.showTaskAction` (was `new (require(...))()`, is now `.TaskActionOverlay`).
+
+### Backend
+- `monitor.jl`: `get_network_stats()` computes per-interface delta speeds (`rx_speed`/`tx_speed`, B/s) via `_NET_SAMPLE` baseline; memory dict includes `used_gb`.
+- `bridge.jl`: `system.status` memory response includes `used_gb`.
+- `os_check.jl`: Arch restriction gate — `KAMILA_ARCH_RESTRICT=off|warn|strict` (default off), `arch_restriction_mode()`, `verify_arch_restriction()`; wired into `Kamila.main()`. Exports: `is_arch_linux`, `get_linux_distro`, `verify_arch_restriction`, `generate_compatibility_report`, `enforce_platform_restriction`.
+
+### Test results
+- security 89/89, monitor 14/14, bridge 153/153, desktop 34/34. TUI smoke harness `/tmp/opencode/ui_fix_test.js` — 13/13 pass.
+
+### Setup (scripts/setup.sh updated)
+- Installs tui-v2 npm deps. Checks desktop-context tools (xsel, qdbus6, kdotool). Documents `KAMILA_ARCH_RESTRICT`.
+- `bin/kamila --setup` already installs tui-v2 npm deps.
+
+### Fix round (2026-08-31) — security & robustness hardening
+- **Logging default** (`bin/kamila`): now `info` by default; `KAMILA_VERBOSE=1` or `KAMILA_LOG=debug` opts into verbose JSON. `--verbose` is honored anywhere in argv. This stops full request/response/thinking content from being persisted to `~/.kamila/logs/kamila.log` by default.
+- **bridge.jl**: streaming `ai token`/`ai agent token` logs now record `chars`/length (not raw chunk text); tool-call logs record `args_len` and at most the first 200 chars of `args` (truncated), instead of dumping full tool args.
+- **os_check.jl**: split the pure `arch_restriction_check()` (`:ok|:warn|:block`) from the thin `verify_arch_restriction()` wrapper that prints and may `exit(1)`. Added `KAMILA_FORCE_ARCH=true|false` override so the decision is deterministic on any host and testable without triggering `exit(1)`. Removed emoji from user-facing output.
+- **monitor.jl**: `_NET_SAMPLE` delta baseline is now guarded by a `ReentrantLock` (no data race under concurrent `@async` dispatch); the baseline dict is rebuilt fresh each call so interfaces that disappear are pruned automatically.
+- **desktop_context.jl**: implemented the previously-documented `xsel -b -o` X11 clipboard fallback (only when no `KAMILA_CLIPBOARD_CMD` override); KWin-script window-title probe result is cached for a 2s TTL to avoid heavy qdbus/journal churn on frequent polls.
+- **log.jl**: module docstring now documents the actual JSON schema (`origin`/`kind`, not `module`).
+- **Tests**: added monitor coverage for delta-speed priming/second-sample/reporting, counter-reset non-negativity, and interface pruning; security tests now exercise `arch_restriction_check` via `KAMILA_FORCE_ARCH` (no host-distro dependence, never calls `exit(1)`).
+- **Known non-breaking note**: the JSON log field was already `origin`/`kind` in code; the docstring previously claiming `module` is now corrected. No runtime schema change was made in this round.

@@ -246,6 +246,8 @@ function handle_system_status(id::String, params::AbstractDict)
                     get(get(stats, "memory", Dict()), "used_percent", 0),
                     digits = 1,
                 ),
+                "used_gb" =>
+                    round(get(get(stats, "memory", Dict()), "used_gb", 0), digits = 1),
                 "free_gb" =>
                     round(get(get(stats, "memory", Dict()), "free_gb", 0), digits = 1),
                 "total_gb" =>
@@ -395,10 +397,22 @@ function handle_ai_query(id::String, params::AbstractDict)
 
         mode = get(params, "mode", ACTIVE_MODE[])
         sys_prompt = get_mode_prompt(mode)
-        
+
         # Get current session ID for session-scoped history
         session_id = Episodic.get_current_session()
         history = Episodic.get_session_history(session_id)
+
+        KamilaLog.info(
+            "ai query start";
+            mod = "ai",
+            kind = "request",
+            fields = Dict(
+                "task_type" => string(task_type),
+                "mode" => mode,
+                "history_len" => length(history),
+                "prefer_model" => prefer_model,
+            ),
+        )
 
         # Inject query-aware memory context for chat mode
         if mode == "chat"
@@ -438,15 +452,34 @@ function handle_ai_query(id::String, params::AbstractDict)
                 model_ref = model_ref,
             )
 
+            KamilaLog.debug(
+                "ai loop iteration";
+                mod = "ai",
+                kind = "request",
+                fields = Dict("loop" => loop, "max_loops" => max_tool_loops, "model" => model_ref[]),
+            )
+
             # Accumulate the content stream; relay thinking separately.
-            raw_response = ""
-            thinking_text = ""
+            raw_response::String = ""
+            thinking_text::String = ""
             for item in channel
                 if item.is_thinking
                     thinking_text *= item.text
+                    KamilaLog.debug(
+                        "ai token";
+                        mod = "ai",
+                        kind = "stream",
+                        fields = Dict("phase" => "thinking", "chars" => length(item.text)),
+                    )
                     send_stream_chunk(id, item.text; kind = "thinking")
                 else
                     raw_response *= item.text
+                    KamilaLog.debug(
+                        "ai token";
+                        mod = "ai",
+                        kind = "stream",
+                        fields = Dict("phase" => "content", "chars" => length(item.text)),
+                    )
                 end
             end
 
@@ -462,6 +495,15 @@ function handle_ai_query(id::String, params::AbstractDict)
                 end
 
                 # Emit tool_call event for TUI
+                args_str = string(tool_args)
+                args_len = length(args_str)
+                args_log = args_len > 200 ? args_str[1:200] * "… (truncated)" : args_str
+                KamilaLog.info(
+                    "ai tool call";
+                    mod = "ai",
+                    kind = "tool",
+                    fields = Dict("name" => tool_name, "args_len" => args_len, "args" => args_log),
+                )
                 write_json(
                     Dict(
                         "type" => "tool_call",
@@ -480,6 +522,12 @@ function handle_ai_query(id::String, params::AbstractDict)
                 end
 
                 # Emit tool_result event for TUI
+                KamilaLog.debug(
+                    "ai tool result";
+                    mod = "ai",
+                    kind = "tool",
+                    fields = Dict("name" => tool_name, "result_len" => length(tool_result)),
+                )
                 write_json(
                     Dict(
                         "type" => "tool_result",
@@ -507,6 +555,13 @@ function handle_ai_query(id::String, params::AbstractDict)
         end
 
         send_stream_end(id; model = model_ref[])
+
+        KamilaLog.info(
+            "ai query complete";
+            mod = "ai",
+            kind = "response",
+            fields = Dict("chars" => length(full_response), "model" => model_ref[]),
+        )
 
         # Only mutate history on success
         session_id = Episodic.get_current_session()
@@ -553,6 +608,13 @@ function handle_ai_agent_query(id::String, params::AbstractDict)
         max_iterations = get(params, "max_iterations", 5)
         native = get(params, "native_tools", false)   # 05.1: prefer native tool_calls
 
+        KamilaLog.info(
+            "ai agent query start";
+            mod = "ai",
+            kind = "request",
+            fields = Dict("task_type" => string(task_type), "max_iterations" => max_iterations, "native_tools" => native),
+        )
+
         if native
             channel = AgentStream.run_agent_stream_native(
                 prompt,
@@ -573,8 +635,13 @@ function handle_ai_agent_query(id::String, params::AbstractDict)
 
         for event in channel
             if event isa AgentStream.TokenEvent
+                KamilaLog.debug("ai agent token"; mod = "ai", kind = "stream", fields = Dict("chars" => length(event.token)))
                 send_stream_chunk(id, event.token)
             elseif event isa AgentStream.ToolCallEvent
+                args_str = string(event.args)
+                args_len = length(args_str)
+                args_log = args_len > 200 ? args_str[1:200] * "… (truncated)" : args_str
+                KamilaLog.info("ai agent tool call"; mod = "ai", kind = "tool", fields = Dict("name" => event.name, "args_len" => args_len, "args" => args_log))
                 write_json(
                     Dict(
                         "type" => "tool_call",

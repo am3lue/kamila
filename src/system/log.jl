@@ -6,8 +6,10 @@ never polluted by log traffic. Supports:
 
   - Levels: debug < info < warn < error < fatal (default: info).
   - `KAMILA_LOG` env override for the level (e.g. `KAMILA_LOG=debug`).
-  - `KAMILA_LOG_FORMAT=json` for `{"ts","level","module","msg","fields"}` lines,
-    otherwise human-readable `[level] module: msg field=value`.
+  - `KAMILA_LOG_FORMAT=json` for
+    `{"ts","level","origin","kind","msg","fields",...}` lines (the module
+    field is `origin`; `kind` is the event category), otherwise human-readable
+    `[level] origin[kind]: msg field=value`.
   - `KAMILA_LOG_FILE` for an optional file sink with simple size-based rotation
     (archive at 5 MB, keep 3 archives).
   - A thread-local `context` (e.g. a bridge request id) so multi-step work is
@@ -182,14 +184,18 @@ end
 
 """
 Write a line to all enabled sinks. `fields` must be a `Dict{String,<:Any}` or
-`nothing`. Returns `nothing`.
+`nothing`. `kind` categorizes the event (e.g. "request", "stream", "tool",
+"memory", "security", "system", "error", "lifecycle") so entries are
+filterable by origin (`mod`), kind, what (`msg`) and criticality (`level`).
+Returns `nothing`.
 """
-function write_line(level::Int, mod::String, msg::String, fields)
+function write_line(level::Int, mod::String, msg::String, fields; kind::String = "log")
     if _FORMAT_JSON[]
         entry = Dict{String,Any}(
             "ts" => string(now()),
             "level" => get(_LEVEL_NAMES, level, "info"),
-            "module" => mod,
+            "origin" => mod,
+            "kind" => kind,
             "msg" => msg,
         )
         ctx = current_context()
@@ -209,7 +215,7 @@ function write_line(level::Int, mod::String, msg::String, fields)
             kv = join([string(k, "=", v) for (k, v) in fields], " ")
             fields_part = " $kv"
         end
-        line = "[$lname] $mod$ctx_part: $msg$fields_part"
+        line = "[$lname] $mod[$kind]$ctx_part: $msg$fields_part"
     end
 
     println(stderr, line)
@@ -268,10 +274,10 @@ end
 
 # ─── Leveled API ──────────────────────────────────────────
 
-function log(level::Int, msg::AbstractString; mod::String = "kamila", fields = nothing)
+function log(level::Int, msg::AbstractString; mod::String = "kamila", kind::String = "log", fields = nothing)
     level >= _LEVEL[] || return nothing
     _rotate_if_needed()
-    write_line(level, mod, String(msg), fields)
+    write_line(level, mod, String(msg), fields; kind = kind)
     return nothing
 end
 

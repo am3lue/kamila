@@ -95,6 +95,44 @@ const SM = Kamila.SystemMonitor
               nothing
     end
 
+    @testset "network: first call primes, second call yields speeds" begin
+        SM._NET_SAMPLE[] = nothing
+        first = SM.get_network_stats()
+        # First call primes the baseline — no speed keys expected.
+        for itf in first
+            @test !haskey(itf, "rx_speed")
+            @test !haskey(itf, "tx_speed")
+        end
+        sleep(0.05)
+        second = SM.get_network_stats()
+        for itf in second
+            # A second sample must report numeric speeds (non-negative).
+            @test haskey(itf, "rx_speed")
+            @test haskey(itf, "tx_speed")
+            @test itf["rx_speed"] isa Float64
+            @test itf["tx_speed"] isa Float64
+            @test itf["rx_speed"] >= 0.0
+            @test itf["tx_speed"] >= 0.0
+        end
+    end
+
+    @testset "network: counter reset does not produce negative speeds" begin
+        SM._NET_SAMPLE[] = Dict("eth9" => (time() - 1.0, 1000.0, 1000.0))
+        # Simulate a counter reset: rx/tx below the previous baseline.
+        itf = Dict("iface" => "eth9", "rx_bytes" => 500.0, "tx_bytes" => 500.0)
+        SM._network_delta_speeds!(Dict[itf])
+        @test itf["rx_speed"] >= 0.0
+        @test itf["tx_speed"] >= 0.0
+    end
+
+    @testset "network: disappeared interface pruned from baseline" begin
+        SM._NET_SAMPLE[] = Dict("gone0" => (time() - 1.0, 1.0, 1.0))
+        itf = Dict("iface" => "still0", "rx_bytes" => 10.0, "tx_bytes" => 10.0)
+        SM._network_delta_speeds!(Dict[itf])
+        @test !haskey(SM._NET_SAMPLE[], "gone0")
+        @test haskey(SM._NET_SAMPLE[], "still0")
+    end
+
     @testset "internet latency: nothing on failure, number on success" begin
         v = SM.get_internet_latency()
         @test v === nothing || v isa Float64

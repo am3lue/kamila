@@ -60,15 +60,16 @@ end
         @test occursin("b=two", out)
     end
 
-    @testset "JSON format emits parseable objects with ts/level/module/msg" begin
+    @testset "JSON format emits parseable objects with ts/level/origin/kind/msg" begin
         L.set_json_format(true)
         out = with_captured_stderr() do
-            L.info("json log"; mod = "logtest", fields = Dict("k" => "v"))
+            L.info("json log"; mod = "logtest", kind = "request", fields = Dict("k" => "v"))
         end
         line = first(filter(!isempty, split(out, "\n")))
         data = JSON.parse(line)
         @test data["level"] == "info"
-        @test data["module"] == "logtest"
+        @test data["origin"] == "logtest"
+        @test data["kind"] == "request"
         @test data["msg"] == "json log"
         @test haskey(data, "ts")
         @test data["fields"]["k"] == "v"

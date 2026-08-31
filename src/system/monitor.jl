@@ -109,6 +109,10 @@ function get_system_stats()
             "memory" => Dict(
                 "total_gb" => info["total_memory_gb"],
                 "free_gb" => info["free_memory_gb"],
+                "used_gb" => round(
+                    info["total_memory_gb"] - info["free_memory_gb"],
+                    digits = 1,
+                ),
                 "used_percent" => round(
                     (
                         (info["total_memory_gb"] - info["free_memory_gb"]) /
@@ -670,6 +674,46 @@ function get_network_stats()
             )
         end
     catch
+    end
+    _network_delta_speeds!(interfaces)
+    return interfaces
+end
+
+# ─── Network speed (delta sampling) ───────────────────────
+#
+# /proc/net/dev exposes cumulative byte counters. Speeds are derived by
+# subtracting the previous sample and dividing by elapsed time (the same
+# "delta trick" htop/fastfetch/bwm-ng use). First call primes the baseline
+# with no speeds; subsequent calls report bytes/second per interface.
+
+const _NET_SAMPLE = Ref{Union{Nothing,Dict{String,Tuple{Float64,Float64,Float64}}}}(nothing)
+const _NET_LOCK = ReentrantLock()
+
+function _network_delta_speeds!(interfaces::Vector{Dict})
+    now = time()
+    lock(_NET_LOCK) do
+        prev = _NET_SAMPLE[]
+        # `current` is rebuilt fresh each call, so interfaces that disappeared
+        # since the last sample are naturally pruned from the baseline; stale
+        # entries never linger in the module-global state across calls.
+        current = Dict{String,Tuple{Float64,Float64,Float64}}()
+        for itf in interfaces
+            current[itf["iface"]] = (now, itf["rx_bytes"], itf["tx_bytes"])
+        end
+        if prev !== nothing
+            for itf in interfaces
+                name = itf["iface"]
+                if haskey(prev, name)
+                    t0, rx0, tx0 = prev[name]
+                    dt = now - t0
+                    if dt > 0
+                        itf["rx_speed"] = round(max(itf["rx_bytes"] - rx0, 0.0) / dt, digits = 1)
+                        itf["tx_speed"] = round(max(itf["tx_bytes"] - tx0, 0.0) / dt, digits = 1)
+                    end
+                end
+            end
+        end
+        _NET_SAMPLE[] = current
     end
     return interfaces
 end

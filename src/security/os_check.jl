@@ -5,7 +5,15 @@ Ensures Kamila only runs on Linux operating systems
 
 module OSCheck
 
-export is_linux_os, verify_os_compatibility, get_system_info
+export is_linux_os,
+    verify_os_compatibility,
+    get_system_info,
+    get_linux_distro,
+    is_arch_linux,
+    arch_restriction_check,
+    verify_arch_restriction,
+    generate_compatibility_report,
+    enforce_platform_restriction
 
 """
 Check if current OS is Linux
@@ -57,10 +65,20 @@ function get_system_info()
 end
 
 """
-Check if running on Arch Linux specifically
+Check if running on Arch Linux specifically.
+
+Honors the `KAMILA_FORCE_ARCH` env override (`true`/`false`) so the decision
+can be tested deterministically on any host.
 """
 function is_arch_linux()
     if !is_linux_os()
+        return false
+    end
+
+    forced = lowercase(get(ENV, "KAMILA_FORCE_ARCH", ""))
+    if forced in ("true", "1", "yes")
+        return true
+    elseif forced in ("false", "0", "no")
         return false
     end
 
@@ -154,6 +172,64 @@ function enforce_platform_restriction()
     if !is_linux_os()
         verify_os_compatibility()  # This will exit with error message
     end
+end
+
+"""
+    arch_restriction_mode() -> Symbol
+
+Effective Arch-restriction mode: `:off` (default, best-effort only),
+`:warn` (log + console warning on non-Arch), or `:strict` (hard exit on
+non-Arch). Controlled by the `KAMILA_ARCH_RESTRICT` env var
+(`off`/`warn`/`strict`, case-insensitive; any unrecognized value ⇒ `off`).
+This is the "restrict heavily non-Arch users" switch: set `strict` to make
+Kamila refuse to run outside Arch Linux.
+"""
+function arch_restriction_mode()
+    raw = lowercase(get(ENV, "KAMILA_ARCH_RESTRICT", "off"))
+    raw in ("strict", "warn") && return Symbol(raw)
+    return :off
+end
+
+"""
+    arch_restriction_check() -> :ok | :warn | :block
+
+Pure decision function: returns `:ok` when running on Arch (or when the
+restriction is `off`), `:warn` on non-Arch under `warn` mode, and `:block` on
+non-Arch under `strict` mode. Never exits, so it is safe to call from tests.
+See [`arch_restriction_mode`](@ref) for the mode switch.
+"""
+function arch_restriction_check()
+    is_arch_linux() && return :ok
+    mode = arch_restriction_mode()
+    mode == :strict && return :block
+    mode == :warn && return :warn
+    return :ok
+end
+
+"""
+    verify_arch_restriction() -> Bool
+
+Applies the configured Arch restriction via [`arch_restriction_check`](@ref).
+Returns `true` when the check allows running (Arch or `off`), `false`
+otherwise (with a warning on non-Arch under `warn`). In `strict` mode prints
+an error and calls `exit(1)`. Never throws.
+"""
+function verify_arch_restriction()
+    check = arch_restriction_check()
+    check == :ok && return true
+    distro = get_linux_distro()
+    msg = """
+    Kamila is optimized for Arch Linux and is configured to restrict
+    non-Arch systems.
+      Detected distribution: $distro
+    """
+    if check == :block
+        println("[error] Kamila: $msg")
+        println("Set KAMILA_ARCH_RESTRICT=off to run on non-Arch systems.")
+        exit(1)
+    end
+    println("[warn] Kamila: $msg")
+    return false
 end
 
 end # module

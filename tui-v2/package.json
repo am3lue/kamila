@@ -1,0 +1,20 @@
+{
+  "name": "kamila-tui-v2",
+  "version": "0.2.0",
+  "description": "Kamila TUI v2 — Terminal-First Architecture",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "lint": "eslint src",
+    "test": "node --test test/**/*.test.js",
+    "test:check": "node --check src/index.js && node --check src/app/KamilaApp.js && node --check src/bridge/BridgeClient.js"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "marked": "^11.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  }
+}

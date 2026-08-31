@@ -398,7 +398,7 @@ end
 function load_user_skills!()
     _USER_LOADED[] && return nothing
     _USER_LOADED[] = true
-    dir = USER_SKILLS_DIR[]
+    dir::String = USER_SKILLS_DIR[]
     isdir(dir) || return nothing
 
     # Sandboxed module for user code: bad files must not abort the process.

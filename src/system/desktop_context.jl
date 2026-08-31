@@ -6,8 +6,14 @@ window title, the working directory, and (truncated + redacted) clipboard text.
 Feature-detects the session:
 
   - X11:   `xdotool getactivewindow getwindowname` for the window title,
-           `xclip -selection clipboard -o` for the clipboard.
-  - Wayland: `swaymsg -t get_tree` (focused node name) / `gdbus` best-effort,
+           `xclip -selection clipboard -o` (fallback `xsel -b -o`) for the
+           clipboard.
+  - Wayland + KDE Plasma: `kdotool getactivewindow getwindowname` when
+           installed, otherwise a temporary KWin scripting module loaded via
+           `qdbus6`/`qdbus` (`Scripting.loadScript` + `Script.run`, result read
+           back from the kwin journal); clipboard via the Klipper D-Bus
+           interface (`org.kde.klipper /klipper getClipboardContents`).
+  - Wayland (other compositors): `swaymsg -t get_tree` (focused node name),
            `wl-paste` for the clipboard.
   - unknown: graceful `nothing` values — never a crash.
 
@@ -99,6 +105,39 @@ function _tool_cmd(env_name::String, fallback::Cmd)
     return Cmd(`sh -c $override`)
 end
 
+# ─── KDE Plasma detection ────────────────────────────────
+
+"""
+    _is_kde_plasma() -> Bool
+
+True when the running desktop is KDE Plasma (Wayland or X11). Uses the same
+env variables the session itself sets. Overridable via `KAMILA_DESKTOP_KDE`.
+"""
+function _is_kde_plasma()
+    forced = get(ENV, "KAMILA_DESKTOP_KDE", "")
+    if !isempty(forced)
+        return lowercase(forced) in ("1", "true", "yes")
+    end
+    desktop = get(ENV, "XDG_CURRENT_DESKTOP", "")
+    session = get(ENV, "DESKTOP_SESSION", "")
+    kde_full = get(ENV, "KDE_FULL_SESSION", "")
+    return occursin("KDE", desktop) || startswith(session, "plasma") || kde_full == "true"
+end
+
+"""
+    _find_qdbus() -> Union{Cmd,Nothing}
+
+The `qdbus6` binary (Plasma 6), falling back to `qdbus`. `nothing` when
+neither exists.
+"""
+function _find_qdbus()
+    q6 = Sys.which("qdbus6")
+    q6 === nothing || return `$q6`
+    q = Sys.which("qdbus")
+    q === nothing && return nothing
+    return `$q`
+end
+
 # ─── Active window ───────────────────────────────────────
 
 """
@@ -112,9 +151,82 @@ function active_window_title()
     if session == :x11
         return _capture(_tool_cmd("KAMILA_ACTIVE_WINDOW_CMD", `xdotool getactivewindow getwindowname`))
     elseif session == :wayland
+        if _is_kde_plasma()
+            return _kde_active_window()
+        end
         return _sway_active_window()
     end
     return nothing
+end
+
+# KDE Plasma: prefer kdotool; fall back to a temporary KWin scripting module.
+# The KWin-script path is heavy (spawns qdbus subprocesses, writes a temp .js,
+# sleep(0.4), then scrapes the journal), so its result is cached for a short TTL
+# to avoid ~1s of child-process churn when a desktop watcher polls frequently.
+const _KWIN_TITLE_CACHE = Ref{Union{Nothing,Tuple{Float64,Union{Nothing,String}}}}(nothing)
+const _KWIN_TTL = 2.0
+
+function _kde_active_window()
+    title = _capture(_tool_cmd("KAMILA_ACTIVE_WINDOW_CMD", `kdotool getactivewindow getwindowname`))
+    title === nothing || return title
+
+    cached = _KWIN_TITLE_CACHE[]
+    if cached !== nothing
+        t0, val = cached
+        (time() - t0) < _KWIN_TTL && return val
+    end
+    val = _kde_kwin_script_title()
+    _KWIN_TITLE_CACHE[] = (time(), val)
+    return val
+end
+
+# Load a small KWin scripting module that prints the focused window caption,
+# run it, capture the result from the kwin journal, then unload it. This is
+# the only non-interactive path on Plasma 6 where `queryWindowInfo` would
+# block on user input. Best-effort: any failure returns `nothing`.
+function _kde_kwin_script_title()
+    qdbus = _find_qdbus()
+    qdbus === nothing && return nothing
+    script = tempname() * ".js"
+    write(script, "print(\"KAMILA_ACTIVE=\" + (workspace.activeWindow ? workspace.activeWindow.caption : \"none\"));\n")
+    try
+        id = _capture(`$qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript $script`)
+        id === nothing && return nothing
+        id = strip(id)
+        isempty(id) && return nothing
+        run(`$qdbus org.kde.KWin /Scripting/Script$id org.kde.kwin.Script.run`)
+        sleep(0.4)
+        title = _journal_kwin_title()
+        try
+            run(`$qdbus org.kde.KWin /Scripting/Script$id org.kde.kwin.Script.stop`)
+        catch
+        end
+        try
+            run(`$qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript $script`)
+        catch
+        end
+        return title
+    catch
+        return nothing
+    finally
+        isfile(script) && rm(script; force = true)
+    end
+end
+
+# Scan the kwin journal for the most recent `KAMILA_ACTIVE=` marker we printed.
+function _journal_kwin_title()
+    out = _capture(`journalctl _COMM=kwin_wayland --since "20 seconds ago" --no-pager -o cat`)
+    out === nothing && return nothing
+    title = nothing
+    for line in reverse(split(out, "\n"))
+        idx = findfirst("KAMILA_ACTIVE=", line)
+        if idx !== nothing
+            val = strip(line[(last(idx) + 1):end])
+            title = val == "none" ? nothing : val
+            break
+        end
+    end
+    return title
 end
 
 # sway: focused leaf node name from `swaymsg -t get_tree`.
@@ -149,14 +261,32 @@ masked). `nothing` when no clipboard tool is available.
 function clipboard_text()
     session = detect_session_type()
     raw = if session == :wayland
-        _capture(_tool_cmd("KAMILA_CLIPBOARD_CMD", `wl-paste --no-newline`))
+        if _is_kde_plasma()
+            _kde_clipboard()
+        else
+            _capture(_tool_cmd("KAMILA_CLIPBOARD_CMD", `wl-paste --no-newline`))
+        end
     elseif session == :x11
-        _capture(_tool_cmd("KAMILA_CLIPBOARD_CMD", `xclip -selection clipboard -o`))
+        raw_cmd = _tool_cmd("KAMILA_CLIPBOARD_CMD", `xclip -selection clipboard -o`)
+        raw_override = get(ENV, "KAMILA_CLIPBOARD_CMD", "") != ""
+        raw = if raw_override
+            _capture(raw_cmd)
+        else
+            xc = _capture(raw_cmd)
+            xc === nothing ? _capture(`xsel -b -o`) : xc
+        end
     else
         nothing
     end
     raw === nothing && return nothing
     return _redact_clipboard(raw)
+end
+
+# KDE Plasma clipboard via the Klipper D-Bus interface (qdbus6 on Plasma 6).
+function _kde_clipboard()
+    qdbus = _find_qdbus()
+    qdbus === nothing && return nothing
+    return _capture(_tool_cmd("KAMILA_CLIPBOARD_CMD", `$qdbus org.kde.klipper /klipper org.kde.klipper.klipper.getClipboardContents`))
 end
 
 # Mask secret-looking tokens: long hex/base64 runs, sk-/ghp_ style prefixes,

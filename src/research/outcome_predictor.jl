@@ -122,7 +122,7 @@ function evaluate(
     idx = shuffle(rng, 1:length(samples))
     n_train = max(1, round(Int, train_ratio * length(samples)))
     train = samples[idx[1:n_train]]
-    test = samples[idx[n_train+1:end]]
+    test::Vector{OutcomeSample} = samples[idx[n_train+1:end]]
 
     lookup = build_lookup(train)
 
