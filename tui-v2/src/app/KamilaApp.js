@@ -29,12 +29,13 @@ class KamilaApp {
     this.regionManager = new RegionManager(screen);
     this.messageStore = new MessageStore();
     this.uiState = new UIState();
+    this._voiceCancelled = false;
     this.focusManager = new FocusManager();
     this.keybindings = new Keybindings(screen, this.focusManager);
     const os = require('os');
     const path = require('path');
     const fs = require('fs');
-    const tuiLogDir = process.env.KAMILA_HOME || path.join(os.homedir(), '.kamila', 'logs');
+    const tuiLogDir = path.join(process.env.KAMILA_HOME || path.join(os.homedir(), '.kamila'), 'logs');
     const tuiLogFile = path.join(tuiLogDir, 'tui.log');
     try { fs.mkdirSync(tuiLogDir, { recursive: true }); } catch (e) {}
     this.logBuffer = {
@@ -188,7 +189,7 @@ class KamilaApp {
     this.keybindings.on('delete.contextual', () => this._contextualDelete());
     this.keybindings.on('input.focus', () => this.chatInput.focus());
     this.keybindings.on('overlay.dismiss', () => this._dismissOverlays());
-    this.keybindings.on('app.quit', () => { this.bridge.stop(); process.exit(0); });
+    this.keybindings.on('app.quit', () => this.quitApp());
 
     this.screen.key(['escape'], () => this._dismissOverlays());
     this.screen.key(['tab'], () => this.chatInput.focus());
@@ -227,6 +228,11 @@ class KamilaApp {
   }
 
   quitApp() {
+    // Never kill the app mid-capture; treat an accidental quit like Esc (cancel).
+    if (this.uiState.get('voiceRecording')) {
+      this._cancelVoiceRecord();
+      return;
+    }
     this.bridge.stop();
     process.exit(0);
   }
@@ -281,6 +287,12 @@ class KamilaApp {
   }
 
   _dismissOverlays() {
+    // Esc while voice is recording cancels the capture, never quits the app.
+    // Otherwise an accidental Esc mid-capture kills the app + in-flight promise.
+    if (this.uiState.get('voiceRecording')) {
+      this._cancelVoiceRecord();
+      return;
+    }
     if (this.commandPalette.visible) { this.commandPalette.hide(); return; }
     if (this.logPanel.visible) { this.logPanel.hide(); return; }
     if (this.permissionPanel.visible) { this.permissionPanel.hide(); return; }
@@ -289,6 +301,17 @@ class KamilaApp {
     if (this.toastStack && this.toastStack.toasts.length) { this.toastStack.clear(); return; }
     this.bridge.stop();
     process.exit(0);
+  }
+
+  _cancelVoiceRecord() {
+    this._voiceCancelled = true;
+    this.voiceIndicator.cancel();
+    this.uiState.set('voiceRecording', false);
+    this.uiState.set('voiceSeconds', 0);
+    this.chatInput.setHint('');
+    this._appendChat('{textDim}Voice recording cancelled.{/}');
+    this.chatInput.focus();
+    this.screen.render();
   }
 
   _contextualDelete() {
@@ -598,6 +621,7 @@ class KamilaApp {
   }
 
   _startVoiceRecord(seconds) {
+    this._voiceCancelled = false;
     this.uiState.set('voiceRecording', true);
     this.uiState.set('voiceSeconds', 0);
     this.uiState.set('voiceTotalSeconds', seconds);
@@ -607,6 +631,7 @@ class KamilaApp {
 
     Bridge.audio.record(this.bridge, seconds)
       .then(rec => {
+        if (this._voiceCancelled) return;  // user cancelled via Esc; ignore late result
         this.voiceIndicator.stop();
         this.uiState.set('voiceRecording', false);
         const text = (rec && rec.text) || '';
@@ -620,6 +645,7 @@ class KamilaApp {
         this.logBuffer.push('info', 'audio', 'voice', `Draft: ${text}`);
       })
       .catch(e => {
+        if (this._voiceCancelled) return;
         this.voiceIndicator.stop();
         this.uiState.set('voiceRecording', false);
         this.voiceIndicator.cancel();
