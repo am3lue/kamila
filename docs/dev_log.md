@@ -182,3 +182,47 @@ quit. TUI unit suite 16/16 green; eslint 0 errors.
   scrollable fixed-height box without growing is fragile; ensure the caret
   row is always on-screen and the box grows with content rather than relying on
   a scrollbar to reveal it.
+
+## Session 2026-08-31 — Shift+Enter crash, Enter reliability, input alignment
+
+Origin: TUI · Kind: ui/input · Level: critical
+
+### Symptom (user)
+Shift+Enter closes the app; Enter "does nothing"; typed text is hard to see
+and the `--[STDIN]----` border / input box "only initially align."
+
+### Root cause — modifier+Enter is unreliable in blessed (verified by
+feeding byte sequences through `blessed/lib/keys.js` `emitKeys`):
+- **CSI-u** (`\x1b[13;2u` = Shift+Enter, `\x1b[13;5u` = Ctrl+Enter) is **not
+  parsed** — blessed splits it into literal chars `13;2u`.
+- **Legacy Shift+Enter** (`\x1b\r`) decodes the leading `\x1b` as the
+  **ESC key** → hits the global escape handler → `_dismissOverlays` → falls
+  through to `process.exit(0)`. So **Shift+Enter quit the app**.
+- A plain `\r` fires **twice** (`enter` then `return`), which could double-submit.
+
+### Fixes (commit `83fbff2`)
+- `ChatInput._onKey`: **plain Enter/return submits** (the reliable path);
+  **Ctrl/Alt+Enter** insert a multiline newline (best-effort). Removed the
+  `key.shift`/`S-enter` newline path — the crash vector. Deduped the double
+  `\r` by `key.sequence`.
+- `KamilaApp._dismissOverlays`: while the chat input is composing (`active`),
+  **Esc only dismisses overlays and never falls through to exit** — the guard
+  that stops a mangled Shift+Enter (decoded as ESC) from quitting mid-typing.
+- `ChatInput` geometry: `left:0`/`width:'100%-1'` (was `left:1`/`100%-2`, which
+  with blessed `autoPadding` double-applied the border inset, pushing text a col
+  off the STDIN border). Verified aleft=1 == content col left border+1. Dropped
+  the always-on scrollbar.
+- Footer hint → `Enter:Send  C-o:Editor  Tab:Focus`.
+
+Tests: 19/19 green (Shift+Enter submits without newline/literal chars, double-`\r`
+dedupes, Esc-while-composing never quits and still dismisses overlays).
+
+### Blessed-reliability rule (for skill/rules)
+- **Do not rely on modifier+Enter in blessed.** blessed only reliably decodes
+  plain `\r`/`\n` (Enter/LF); CSI-u (Kitty/modifyOtherKeys) modifier+Enter is
+  not parsed, and legacy modifier+Enter can decode the leading ESC as a key.
+  For a newline escape hatch, use a plain non-Enter key (e.g. a dedicated
+  editor modal) rather than Shift/Ctrl+Enter.
+- **Guard process-exit behind "not composing"**: any key that can fall through
+  to `process.exit` must first check the editing mode; a stray ESC from an
+  unrelated key decode must never kill an in-progress edit.
