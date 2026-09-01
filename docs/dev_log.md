@@ -144,3 +144,41 @@ duplicate-column migration warnings spam stderr on cold start (S4).
   sensitive field appears in any log call, treat its *level* as a
   security-relevant decision; don't assume `info` is safe just because it's
   the "common" level. Keep payload content at `debug` and metadata at `info`.
+
+## Session 2026-08-31 — Prompt-input submit & typed-text visibility
+
+Origin: TUI · Kind: ui/input · Level: high
+
+### Fixed — Enter now submits the prompt (origin: tui, kind: ui, level: high)
+User report: "the prompt is not submitted but the space is formed" — the
+custom `ChatInput` only submitted on **Ctrl-Enter**; a plain **Enter** inserted
+a newline, so pressing Enter produced a blank "space" and the prompt stayed
+unsubmitted. Also, typed text could be invisible: the editable area was a fixed
+single row (`input height '100%-3'` in the 4-row box) and `alwaysScroll:true`
++ a scrollbar could render a hidden caret / clipped content.
+
+- `ChatInput._onKey` (`src/components/ChatInput.js`): plain **Enter/return now
+  submits**; **Shift-Enter** (and Ctrl/Alt-Enter, kept as multiline escapes)
+  insert a `\n`. Standard chat UX; long/multiline drafts still available via the
+  dedicated C-o editor modal (`openInputEditor`).
+- Removed `alwaysScroll` + the always-on scrollbar from the input box so the
+  typed caret line renders in the full width without a wasted column or a
+  clipped caret — "the moment I start typing it makes space and the words
+  appear."
+- Footer hint updated to `Enter:Send  Shift-Enter:Newline  Tab:Focus  Esc:Quit`.
+
+Tests: `tui-v2/test/unit/chatInputSubmit.test.js` (7 tests) covering plain-Enter
+submit, return submit, Shift/Ctrl/Alt-Enter newline, char insert, C-c clear-no-
+quit. TUI unit suite 16/16 green; eslint 0 errors.
+
+### UI-idiom note (for skill/rules)
+- **Key-to-action asymmetry**: an input that captures keys must align its
+  "primary action" key with user expectation (`Enter` = confirm/send). Mapping
+  the primary action to a chord (Ctrl-Enter) while the bare key does a
+  secondary thing (newline) is non-discoverable and felt like a bug. When an
+  escape hatch for a secondary action is needed, prefer a *modifier* on the
+  primary key (`Shift-Enter`) over a bare-key trap.
+- **Single-row editable + alwaysScroll**: rendering an editable caret in a
+  scrollable fixed-height box without growing is fragile; ensure the caret
+  row is always on-screen and the box grows with content rather than relying on
+  a scrollbar to reveal it.
