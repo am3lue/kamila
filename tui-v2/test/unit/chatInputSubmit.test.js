@@ -23,6 +23,7 @@ function makeInput() {
     input.cursor += text.length;
   };
   input._submit = () => { input.submitted = input.value; };
+  input._lastEnterSeq = null;
   return input;
 }
 
@@ -32,6 +33,7 @@ const key = (name, extra = {}) => ({
   ctrl: false,
   meta: false,
   shift: false,
+  sequence: '\r',
   ...extra,
 });
 
@@ -51,13 +53,23 @@ test('plain return submits too', () => {
   assert.strictEqual(input.submitted, 'hi');
 });
 
-test('Shift-Enter inserts a newline and does not submit', () => {
+test('Shift-Enter submits (does not insert newline, does not append literal chars)', () => {
   const input = makeInput();
   input.value = 'line';
   input.cursor = 4;
-  input._onKey(null, key('enter', { shift: true }));
-  assert.strictEqual(input.value, 'line\n', 'newline inserted');
-  assert.strictEqual(input.submitted, undefined, 'not submitted');
+  // blessed may report Shift+Enter as an enter event with shift set (some
+  // terminals), or as a split sequence; either way it must not insert '\n'.
+  input._onKey(null, key('enter', { shift: true, sequence: '\x1b\r' }));
+  assert.strictEqual(input.submitted, 'line', 'submits instead of newline');
+});
+
+test('double \\r (enter then return) submits only once', () => {
+  const input = makeInput();
+  input.value = 'payload';
+  input.cursor = 7;
+  input._onKey(null, key('enter'));   // first event -> submit
+  input._onKey(null, key('return'));  // same seq -> ignored (dedupe)
+  assert.strictEqual(input.submitted, 'payload');
 });
 
 test('Ctrl-Enter inserts a newline (kept as multiline escape)', () => {

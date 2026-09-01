@@ -293,6 +293,19 @@ class KamilaApp {
       this._cancelVoiceRecord();
       return;
     }
+    // While composing in the input, Esc only dismisses overlays. It must never
+    // fall through to exit: terminals can decode a modifier+Enter (e.g. a
+    // Shift+Enter that sends "\x1b\r") as an escape key, which would otherwise
+    // quit the app mid-composition.
+    if (this.chatInput && this.chatInput.active) {
+      if (this.commandPalette.visible) { this.commandPalette.hide(); this.screen.render(); return; }
+      if (this.logPanel.visible) { this.logPanel.hide(); this.screen.render(); return; }
+      if (this.permissionPanel.visible) { this.permissionPanel.hide(); this.screen.render(); return; }
+      if (this.inputEditorModal.visible) { this.inputEditorModal.hide(); this.screen.render(); return; }
+      if (this.taskActionOverlay?.visible) { this.taskActionOverlay.hide(); this.screen.render(); return; }
+      if (this.toastStack && this.toastStack.toasts.length) { this.toastStack.clear(); this.screen.render(); }
+      return;
+    }
     if (this.commandPalette.visible) { this.commandPalette.hide(); return; }
     if (this.logPanel.visible) { this.logPanel.hide(); return; }
     if (this.permissionPanel.visible) { this.permissionPanel.hide(); return; }

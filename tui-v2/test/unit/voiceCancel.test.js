@@ -14,6 +14,7 @@ function makeApp() {
     cancel() { this.cancelled = true; },
   };
   app.chatInput = {
+    active: false,
     focused: false,
     hintValue: null,
     setHint(h) { this.hintValue = h; },
@@ -71,6 +72,38 @@ test('Esc with no recording still quits (existing behavior preserved)', () => {
     process.exit = realExit;
   }
   assert.strictEqual(exited, true, 'quit path preserved');
+});
+
+test('Esc while composing in the input never quits (guards Shift+Enter crash)', () => {
+  const app = makeApp();
+  app.uiState.set('voiceRecording', false);
+  app.chatInput.active = true;  // user is typing in the input
+  const realExit = process.exit;
+  let exited = false;
+  process.exit = () => { exited = true; };
+  try {
+    app._dismissOverlays();
+  } finally {
+    process.exit = realExit;
+  }
+  assert.strictEqual(exited, false, 'must not quit while input active');
+  assert.strictEqual(app.bridge.stopped, false, 'bridge not stopped');
+});
+
+test('Esc while input active still dismisses open overlays', () => {
+  const app = makeApp();
+  app.chatInput.active = true;
+  app.commandPalette.visible = true;
+  const realExit = process.exit;
+  let exited = false;
+  process.exit = () => { exited = true; };
+  try {
+    app._dismissOverlays();
+  } finally {
+    process.exit = realExit;
+  }
+  assert.strictEqual(app.hidden, 'palette', 'palette dismissed');
+  assert.strictEqual(exited, false);
 });
 
 test('quitApp cancels recording instead of quitting', () => {

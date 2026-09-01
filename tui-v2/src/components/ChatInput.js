@@ -23,6 +23,7 @@ class ChatInput {
     this.hint = '';
     this.model = '';
     this._lastLines = 1;
+    this._lastEnterSeq = null;
   }
 
   create() {
@@ -44,8 +45,8 @@ class ChatInput {
     this.input = blessed.box({
       parent: this.box,
       top: 0,
-      left: 1,
-      width: '100%-2',
+      left: 0,
+      width: '100%-1',
       height: '100%-3',
       style: {
         fg: theme.text,
@@ -57,14 +58,13 @@ class ChatInput {
       input: true,
       mouse: true,
       scrollable: true,
-      scrollbar: { style: { bg: theme.surface } },
     });
 
     this.footer = blessed.text({
       parent: this.box,
       top: '100%-3',
-      left: 1,
-      width: '100%-2',
+      left: 0,
+      width: '100%-1',
       height: 1,
       style: { fg: theme.textMuted, bg: theme.surface },
       tags: true,
@@ -145,9 +145,16 @@ class ChatInput {
       return;
     }
 
-    // Enter submits. Shift-Enter / C-Enter / Alt-Enter insert a (multiline) newline.
+    // Enter submits. Ctrl/Alt+Enter insert a multiline newline when the
+    // terminal/blessed reports those modifiers (best-effort). We deliberately
+    // do NOT map Shift+Enter to newline: blessed does not parse the CSI-u
+    // Shift+Enter sequence and a legacy terminal sends "\x1b\r", whose leading
+    // escape byte would otherwise hit the global escape handler and quit.
     if (key.name === 'enter' || key.name === 'linefeed' || key.name === 'return') {
-      if (key.ctrl || key.meta || key.shift || full === 'C-enter' || full === 'S-enter') {
+      // A single "\r" may arrive twice (enter, then return); only handle once.
+      if (this._lastEnterSeq === key.sequence) return;
+      this._lastEnterSeq = key.sequence;
+      if (key.ctrl || key.meta || full === 'C-enter') {
         this._insert('\n');
       } else {
         this._submit();
@@ -308,7 +315,7 @@ class ChatInput {
 
   _renderFooter() {
     if (!this.footer) return;
-    const hint = this.hint || '{textDim}Enter:Send  Shift-Enter:Newline  Tab:Focus  Esc:Quit{/}';
+    const hint = this.hint || '{textDim}Enter:Send  C-o:Editor  Tab:Focus  Esc:Quit{/}';
     this.footer.setContent(` ${hint} `);
   }
 
