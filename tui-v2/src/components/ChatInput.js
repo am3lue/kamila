@@ -57,7 +57,6 @@ class ChatInput {
       input: true,
       mouse: true,
       scrollable: true,
-      alwaysScroll: true,
       scrollbar: { style: { bg: theme.surface } },
     });
 
@@ -146,12 +145,12 @@ class ChatInput {
       return;
     }
 
-    // Submit: C-Enter / Alt-Enter (Enter alone inserts a newline).
+    // Enter submits. Shift-Enter / C-Enter / Alt-Enter insert a (multiline) newline.
     if (key.name === 'enter' || key.name === 'linefeed' || key.name === 'return') {
-      if (key.ctrl || key.meta || full === 'C-enter') {
-        this._submit();
-      } else {
+      if (key.ctrl || key.meta || key.shift || full === 'C-enter' || full === 'S-enter') {
         this._insert('\n');
+      } else {
+        this._submit();
       }
       return;
     }
@@ -309,7 +308,7 @@ class ChatInput {
 
   _renderFooter() {
     if (!this.footer) return;
-    const hint = this.hint || '{textDim}C-Enter:Send  Enter:Newline  Tab:Focus  Esc:Quit{/}';
+    const hint = this.hint || '{textDim}Enter:Send  Shift-Enter:Newline  Tab:Focus  Esc:Quit{/}';
     this.footer.setContent(` ${hint} `);
   }
 
